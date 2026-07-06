@@ -1,0 +1,11 @@
+io/trino/plugin/rest/RestTableHandle.class
+io/trino/plugin/rest/openapi/EndpointDefinition.class
+io/trino/plugin/rest/RestMetadata.class
+io/trino/plugin/rest/RestPlugin.class
+io/trino/plugin/rest/openapi/OpenApiSchemaParser.class
+io/trino/plugin/rest/RestConnector.class
+io/trino/plugin/rest/openapi/ColumnDefinition.class
+io/trino/plugin/rest/RestConnectorFactory.class
+io/trino/plugin/rest/RestSplitManager.class
+io/trino/plugin/rest/RestSplit.class
+io/trino/plugin/rest/RestConfig.class

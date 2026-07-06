@@ -1,0 +1,12 @@
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestConfig.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestConnector.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestConnectorFactory.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestHttpClient.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestMetadata.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestPlugin.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestSplit.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestSplitManager.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/RestTableHandle.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/openapi/ColumnDefinition.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/openapi/EndpointDefinition.java
+/home/dovakin/Projects/trino-rest/src/main/java/io/trino/plugin/rest/openapi/OpenApiSchemaParser.java
