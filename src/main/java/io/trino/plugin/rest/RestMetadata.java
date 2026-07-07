@@ -10,6 +10,7 @@ import java.util.Optional;
 import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.plugin.rest.openapi.OpenApiSchemaParser;
+import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorSession;
@@ -39,6 +40,22 @@ public class RestMetadata implements ConnectorMetadata {
         for (EndpointDefinition endpoint : endpoints) {
             tableNameToEndPointDefinition.put(endpoint.tableName(), endpoint);
         }
+    }
+
+    public Map<String, EndpointDefinition> getTableNameToEndPointDefinition() {
+        return tableNameToEndPointDefinition;
+    }
+
+    @Override
+    public Map<String, ColumnHandle> getColumnHandles(ConnectorSession session, ConnectorTableHandle table) {
+        RestTableHandle handle = (RestTableHandle) table;
+        EndpointDefinition definition = tableNameToEndPointDefinition.get(handle.schemaTableName().getTableName());
+        Map<String, ColumnHandle> handles = new HashMap<>();
+        for (ColumnDefinition col : definition.columns()) {
+            ColumnMetadata metadata = new ColumnMetadata(col.name(), TRINO_TYPES.get(col.trinoType()));
+            handles.put(col.name(), new RestColumnHandle(metadata));
+        }
+        return handles;
     }
 
     @Override

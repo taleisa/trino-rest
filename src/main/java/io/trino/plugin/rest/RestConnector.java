@@ -1,16 +1,44 @@
 package io.trino.plugin.rest;
 
 import io.trino.spi.connector.Connector;
+import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorRecordSetProvider;
+import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorSplitManager;
+import io.trino.spi.connector.ConnectorTransactionHandle;
+import io.trino.spi.transaction.IsolationLevel;
 
 public class RestConnector implements Connector {
+    private final RestMetadata metadata;
+    private final RestSplitManager splitManager;
+    private final RestRecordSetProvider recordSetProvider;
 
-    public RestConnector(RestConfig restConfig) {
-        // TODO Auto-generated constructor stub
+    public RestConnector(RestConfig config) throws Exception {
+        this.metadata = new RestMetadata(config);
+        this.splitManager = new RestSplitManager(config, metadata.getTableNameToEndPointDefinition());
+        this.recordSetProvider = new RestRecordSetProvider(config);
     }
 
     @Override
-    public void shutdown() {
-        // TODO Auto-generated method stub
+    public ConnectorTransactionHandle beginTransaction(IsolationLevel isolationLevel, boolean readOnly, boolean autoCommit) {
+        return new ConnectorTransactionHandle() {};
     }
 
+    @Override
+    public ConnectorMetadata getMetadata(ConnectorSession session, ConnectorTransactionHandle transactionHandle) {
+        return metadata;
+    }
+
+    @Override
+    public ConnectorSplitManager getSplitManager() {
+        return splitManager;
+    }
+
+    @Override
+    public ConnectorRecordSetProvider getRecordSetProvider() {
+        return recordSetProvider;
+    }
+
+    @Override
+    public void shutdown() {}
 }

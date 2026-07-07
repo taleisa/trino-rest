@@ -17,7 +17,11 @@ public class RestConnectorFactory implements ConnectorFactory{
     @Override
     public Connector create(String catalogName, Map<String, String> config, ConnectorContext context) {
         RestConfig restConfig = new RestConfig(config);
-        return new RestConnector(restConfig);
+        try {
+            return new RestConnector(restConfig);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize REST connector for catalog " + catalogName, e);
+        }
     }
     
 }
