@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
+import io.airlift.log.Logger;
 import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.plugin.rest.openapi.OpenApiSchemaParser;
@@ -33,17 +34,27 @@ public class RestMetadata implements ConnectorMetadata {
             "JSON", VarcharType.VARCHAR // JSON stored as VARCHAR for now
     );
     private final Map<String, EndpointDefinition> tableNameToEndPointDefinition;
+    private static final Logger log = Logger.get(RestMetadata.class);
 
-    public RestMetadata(RestConfig config) throws Exception {
-        List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
+    public RestMetadata(RestConfig config) {
         this.tableNameToEndPointDefinition = new HashMap<>();
-        for (EndpointDefinition endpoint : endpoints) {
-            tableNameToEndPointDefinition.put(endpoint.tableName(), endpoint);
+        try {
+            List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
+            for (EndpointDefinition endpoint : endpoints) {
+                tableNameToEndPointDefinition.put(endpoint.tableName(), endpoint);
+            }
+        } catch (Exception e) {
+            log.warn(e, "Failed to parse OpenAPI spec");
         }
     }
 
     public Map<String, EndpointDefinition> getTableNameToEndPointDefinition() {
         return tableNameToEndPointDefinition;
+    }
+
+    @Override
+    public List<String> listSchemaNames(ConnectorSession session) {
+        return List.of("default");
     }
 
     @Override
