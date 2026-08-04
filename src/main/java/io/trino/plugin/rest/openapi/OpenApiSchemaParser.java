@@ -47,7 +47,7 @@ public class OpenApiSchemaParser {
             }
             try {
                 Schema responseSchema = get.getResponses().get("200").getContent().get("application/json").getSchema();
-                boolean isRootArray = "array".equals(responseSchema.getType());
+                boolean isRootArray = "array".equals(getType(responseSchema));
                 List<ColumnDefinition> columns = new ArrayList<>();
                 extractColumns(responseSchema, "", columns);
                 if (columns.isEmpty()) {
@@ -83,7 +83,6 @@ public class OpenApiSchemaParser {
 
             }
         } else {
-            System.out.println(prefix + "\nhere" + schemaType);
             // `prefix` is passed with `_` remove it as this will be a column name.
             columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1),
                     TYPE_TO_TRINO_TYPE.get(schemaType)));
@@ -95,7 +94,6 @@ public class OpenApiSchemaParser {
         ParseOptions options = new ParseOptions();
         options.setResolve(true);
         options.setResolveFully(true);
-        options.setResolveCombinators(false);
         options.setExplicitObjectSchema(true);
         SwaggerParseResult result;
         if (config.getSpecUrl() != null) {
