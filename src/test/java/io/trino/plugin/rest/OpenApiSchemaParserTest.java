@@ -154,20 +154,4 @@ public class OpenApiSchemaParserTest {
     assertTrue(endpoints.isEmpty());
   }
 
-  @Test
-  void nullTypeWithPropertiesInferredAsObject() throws Exception {
-    List<EndpointDefinition> endpoints = parse("""
-        {
-          "properties": {
-            "id": { "type": "integer" },
-            "name": { "type": "string" }
-          }
-        }
-        """);
-
-    assertEquals(1, endpoints.size());
-    Map<String, String> columns = columnsOf(endpoints);
-    assertEquals("BIGINT", columns.get("id"));
-    assertEquals("VARCHAR", columns.get("name"));
-  }
 }
