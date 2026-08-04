@@ -1,23 +1,26 @@
 package io.trino.plugin.rest;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-
-import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
-
-import io.trino.plugin.rest.openapi.ColumnDefinition;
-import io.trino.plugin.rest.openapi.EndpointDefinition;
-import io.trino.plugin.rest.openapi.OpenApiSchemaParser;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.models.media.Schema;
+import io.trino.plugin.rest.openapi.ColumnDefinition;
+import io.trino.plugin.rest.openapi.EndpointDefinition;
+import io.trino.plugin.rest.openapi.OpenApiSchemaParser;
 
 public class OpenApiSchemaParserTest {
 
@@ -61,6 +64,18 @@ public class OpenApiSchemaParserTest {
   private Map<String, String> columnsOf(List<EndpointDefinition> endpoints) {
     return endpoints.get(0).columns().stream()
         .collect(Collectors.toMap(ColumnDefinition::name, ColumnDefinition::trinoType));
+  }
+
+  private Schema<?> schemaOf(String json) throws Exception {
+    return new ObjectMapper().readValue(json, Schema.class);
+  }
+
+  @SuppressWarnings("unchecked")
+  private List<ColumnDefinition> extractColumns(Schema<?> schema) throws Exception {
+    Method method = OpenApiSchemaParser.class.getDeclaredMethod(
+        "extractColumns", Schema.class, String.class, List.class, String.class);
+    method.setAccessible(true);
+    return (List<ColumnDefinition>) method.invoke(null, schema, "", new ArrayList<ColumnDefinition>(), "/test");
   }
 
   @Test
@@ -149,9 +164,19 @@ public class OpenApiSchemaParserTest {
   }
 
   @Test
-  void emptySchemaIsSkipped() throws Exception {
-    List<EndpointDefinition> endpoints = parse("{}");
-    assertTrue(endpoints.isEmpty());
+  void topLevelOneOfSchemaHasNoColumns() throws Exception {
+    // A polymorphic response described with oneOf (common for endpoints that can return
+    // different shapes, e.g. a success object or an error object) has no top-level "type",
+    // so there are no properties to turn into columns.
+    List<ColumnDefinition> columns = extractColumns(schemaOf("""
+        {
+          "oneOf": [
+            { "type": "object", "properties": { "id": { "type": "integer" } } },
+            { "type": "object", "properties": { "error": { "type": "string" } } }
+          ]
+        }
+        """));
+    assertTrue(columns.isEmpty());
   }
 
 }
