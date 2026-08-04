@@ -25,7 +25,7 @@ public class RestRecordCursor implements RecordCursor {
         this.columns = columns;
         RestHttpClient client = new RestHttpClient(config);
         long startTime = System.nanoTime();
-        String responseBody = client.fetch(split.url());
+        String responseBody = client.fetch(split.uri());
         long endTime = System.nanoTime();
         readTimeNanos = endTime - startTime;
         ObjectMapper mapper = new ObjectMapper();

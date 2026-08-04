@@ -31,7 +31,7 @@ public class RestRecordSet implements RecordSet {
         try {
             return new RestRecordCursor(split, config, columns);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to create cursor for " + split.url(), e);
+            throw new RuntimeException("Failed to create cursor for " + split.uri(), e);
         }
     }
 
