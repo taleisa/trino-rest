@@ -22,7 +22,7 @@ public class RestRecordSetProvider implements ConnectorRecordSetProvider {
             ConnectorSplit split, ConnectorTableHandle table, List<? extends ColumnHandle> columns) {
         RestSplit restSplit = (RestSplit) split;
         List<io.trino.spi.connector.ColumnMetadata> columnMetadata = columns.stream()
-                .map(col -> ((RestColumnHandle) col).columnMetadata())
+                .map(col -> ((RestColumnHandle) col).getColumnMetadata())
                 .toList();
         return new RestRecordSet(restSplit, config, columnMetadata);
     }

@@ -63,8 +63,7 @@ public class RestMetadata implements ConnectorMetadata {
         EndpointDefinition definition = tableNameToEndPointDefinition.get(handle.schemaTableName().getTableName());
         Map<String, ColumnHandle> handles = new HashMap<>();
         for (ColumnDefinition col : definition.columns()) {
-            ColumnMetadata metadata = new ColumnMetadata(col.name(), TRINO_TYPES.get(col.trinoType()));
-            handles.put(col.name(), new RestColumnHandle(metadata));
+            handles.put(col.name(), new RestColumnHandle(col.name(), TRINO_TYPES.get(col.trinoType())));
         }
         return handles;
     }
@@ -72,7 +71,7 @@ public class RestMetadata implements ConnectorMetadata {
     @Override
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle,
             ColumnHandle columnHandle) {
-        return ((RestColumnHandle) columnHandle).columnMetadata();
+        return ((RestColumnHandle) columnHandle).getColumnMetadata();
     }
 
     @Override

@@ -21,7 +21,7 @@ public class RestConnector implements Connector {
 
     @Override
     public ConnectorTransactionHandle beginTransaction(IsolationLevel isolationLevel, boolean readOnly, boolean autoCommit) {
-        return new ConnectorTransactionHandle() {};
+        return RestTransactionHandle.INSTANCE;
     }
 
     @Override
