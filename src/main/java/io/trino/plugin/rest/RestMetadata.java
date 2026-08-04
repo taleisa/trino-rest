@@ -70,6 +70,12 @@ public class RestMetadata implements ConnectorMetadata {
     }
 
     @Override
+    public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle,
+            ColumnHandle columnHandle) {
+        return ((RestColumnHandle) columnHandle).columnMetadata();
+    }
+
+    @Override
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName) {
         List<SchemaTableName> tableNames = new ArrayList<>();
         for (String tableName : tableNameToEndPointDefinition.keySet()) {
