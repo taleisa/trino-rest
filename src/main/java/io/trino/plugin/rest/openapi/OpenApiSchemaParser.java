@@ -49,7 +49,7 @@ public class OpenApiSchemaParser {
                 Schema responseSchema = get.getResponses().get("200").getContent().get("application/json").getSchema();
                 boolean isRootArray = "array".equals(getType(responseSchema));
                 List<ColumnDefinition> columns = new ArrayList<>();
-                extractColumns(responseSchema, "", columns);
+                extractColumns(responseSchema, "", columns, path);
                 if (columns.isEmpty()) {
                     log.warn("Skipping %s: no columns could be extracted from schema", path);
                     continue;
@@ -67,7 +67,8 @@ public class OpenApiSchemaParser {
      * Extract columns from OPENAPI schema, any non top level array is treated as a
      * json object.
      */
-    private static List<ColumnDefinition> extractColumns(Schema schema, String prefix, List<ColumnDefinition> columns) {
+    private static List<ColumnDefinition> extractColumns(Schema schema, String prefix, List<ColumnDefinition> columns,
+            String path) {
         Boolean isTopLevel = prefix.isEmpty();
         String schemaType = getType(schema);
         // If type is object or non top level array
@@ -79,9 +80,13 @@ public class OpenApiSchemaParser {
             for (Map.Entry<String, Schema> entry : map.entrySet()) {
                 Schema innerSchema = entry.getValue();
                 String name = prefix + entry.getKey();
-                columns = extractColumns(innerSchema, name + "_", columns);
+                columns = extractColumns(innerSchema, name + "_", columns, path);
 
             }
+        } else if (isTopLevel) {
+            // A top-level schema with no resolvable type (e.g. a oneOf/anyOf polymorphic
+            // response) has no properties to turn into columns.
+            log.warn("Skipping %s: top-level schema has no resolvable type (e.g. oneOf/anyOf)", path);
         } else {
             // `prefix` is passed with `_` remove it as this will be a column name.
             columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1),
