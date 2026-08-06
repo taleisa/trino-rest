@@ -1,12 +1,15 @@
 package io.trino.plugin.rest;
 
-import java.util.ArrayList;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.trino.spi.connector.ColumnMetadata;
@@ -14,36 +17,58 @@ import io.trino.spi.connector.RecordCursor;
 import io.trino.spi.type.Type;
 
 public class RestRecordCursor implements RecordCursor {
+    private static final Logger log = Logger.get(RestRecordCursor.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final List<ColumnMetadata> columns;
-    private final List<JsonNode> rows = new ArrayList<>();
-    private int currentRowIndex = -1;
-    private final long completedBytes;
-    private final long readTimeNanos;
+    private final String uri;
+    private final boolean isRootArray;
+    private final JsonParser parser;
+    private final CountingInputStream countingStream;
 
-    public RestRecordCursor(RestSplit split, RestConfig config, List<ColumnMetadata> columns)
-            throws JsonProcessingException {
+    private JsonNode currentRow;
+    private boolean singleObjectReturned = false;
+    private long readTimeNanos;
+
+    public RestRecordCursor(RestSplit split, RestConfig config, List<ColumnMetadata> columns) throws IOException {
         this.columns = columns;
-        RestHttpClient client = new RestHttpClient(config);
-        long startTime = System.nanoTime();
-        String responseBody = client.fetch(split.uri());
-        long endTime = System.nanoTime();
-        readTimeNanos = endTime - startTime;
-        ObjectMapper mapper = new ObjectMapper();
-        JsonNode root = mapper.readTree(responseBody);
-        completedBytes = responseBody.getBytes().length;
-        if (split.endpointDefinition().isRootArray()) {
-            for (JsonNode node : root) {
-                rows.add(node);
-            }
-        } else {
-            rows.add(root);
-        }
+        this.uri = split.uri();
+        this.isRootArray = split.endpointDefinition().isRootArray();
 
+        RestHttpClient client = new RestHttpClient(config);
+        long start = System.nanoTime();
+        InputStream rawStream = client.fetch(uri);
+        CountingInputStream counting = new CountingInputStream(rawStream);
+        JsonParser p = null;
+        try {
+            p = MAPPER.getFactory().createParser(counting);
+            if (isRootArray) {
+                JsonToken token = p.nextToken();
+                if (token != JsonToken.START_ARRAY) {
+                    throw new RuntimeException(
+                            String.format("Expected root JSON array in response from %s but got %s", uri, token));
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            try {
+                if (p != null) {
+                    p.close();
+                } else {
+                    counting.close();
+                }
+            } catch (IOException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
+        this.parser = p;
+        this.countingStream = counting;
+        this.readTimeNanos = System.nanoTime() - start;
     }
 
     @Override
     public long getCompletedBytes() {
-        return completedBytes;
+        return countingStream.getCount();
     }
 
     @Override
@@ -58,32 +83,52 @@ public class RestRecordCursor implements RecordCursor {
 
     @Override
     public boolean advanceNextPosition() {
-        currentRowIndex++;
-        return currentRowIndex < rows.size();
+        long start = System.nanoTime();
+        try {
+            if (isRootArray) {
+                JsonToken token = parser.nextToken();
+                if (token == null || token == JsonToken.END_ARRAY) {
+                    currentRow = null;
+                    return false;
+                }
+                currentRow = MAPPER.readTree(parser);
+            } else {
+                if (singleObjectReturned) {
+                    return false;
+                }
+                currentRow = MAPPER.readTree(parser);
+                singleObjectReturned = true;
+            }
+            return true;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read next row from " + uri, e);
+        } finally {
+            readTimeNanos += System.nanoTime() - start;
+        }
     }
 
     @Override
     public boolean getBoolean(int field) {
         String columnName = columns.get(field).getName();
-        return rows.get(currentRowIndex).get(columnName).asBoolean();
+        return currentRow.get(columnName).asBoolean();
     }
 
     @Override
     public long getLong(int field) {
         String columnName = columns.get(field).getName();
-        return rows.get(currentRowIndex).get(columnName).asLong();
+        return currentRow.get(columnName).asLong();
     }
 
     @Override
     public double getDouble(int field) {
         String columnName = columns.get(field).getName();
-        return rows.get(currentRowIndex).get(columnName).asDouble();
+        return currentRow.get(columnName).asDouble();
     }
 
     @Override
     public Slice getSlice(int field) {
         String columnName = columns.get(field).getName();
-        return Slices.utf8Slice(rows.get(currentRowIndex).get(columnName).asText());
+        return Slices.utf8Slice(currentRow.get(columnName).asText());
     }
 
     @Override
@@ -95,14 +140,22 @@ public class RestRecordCursor implements RecordCursor {
     @Override
     public boolean isNull(int field) {
         String columnName = columns.get(field).getName();
-        JsonNode value = rows.get(currentRowIndex).get(columnName);
+        JsonNode value = currentRow.get(columnName);
         // Check for missing key or value is json null
         return value == null || value.isNull();
     }
 
     @Override
     public void close() {
-        // No resources to release since this is an HTTP request
+        try {
+            // cascades to closing countingStream -> the underlying HTTP InputStream, per
+            // Jackson's default Feature.AUTO_CLOSE_SOURCE
+            parser.close();
+        } catch (IOException e) {
+            // A cleanup failure after rows may have already been successfully delivered (e.g.
+            // Trino stopped early due to a LIMIT) shouldn't fail an otherwise-successful query.
+            log.warn(e, "Failed to close REST response stream for %s", uri);
+        }
     }
 
 }

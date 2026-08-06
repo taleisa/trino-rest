@@ -1,9 +1,8 @@
 package io.trino.plugin.rest;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
 
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.RecordCursor;
@@ -30,7 +29,7 @@ public class RestRecordSet implements RecordSet {
     public RecordCursor cursor() {
         try {
             return new RestRecordCursor(split, config, columns);
-        } catch (JsonProcessingException e) {
+        } catch (IOException e) {
             throw new RuntimeException("Failed to create cursor for " + split.uri(), e);
         }
     }
