@@ -21,8 +21,28 @@ public class RestHttpClient {
      * for closing it (and, transitively, the underlying connection) once done reading.
      */
     public InputStream fetch(String url) {
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url))
-                .header("Authorization", String.format("Bearer %s", config.getToken())).GET().build();
+        HttpRequest request = authorizedRequest(url).GET().build();
+        return send(request, url);
+    }
+
+    /**
+     * Same contract as {@link #fetch(String)}, but POSTs {@code jsonBody} as the request body
+     * with a JSON content type.
+     */
+    public InputStream post(String url, String jsonBody) {
+        HttpRequest request = authorizedRequest(url)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .build();
+        return send(request, url);
+    }
+
+    private HttpRequest.Builder authorizedRequest(String url) {
+        return HttpRequest.newBuilder().uri(URI.create(url))
+                .header("Authorization", String.format("Bearer %s", config.getToken()));
+    }
+
+    private InputStream send(HttpRequest request, String url) {
         try {
             HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() != 200) {

@@ -37,7 +37,9 @@ public class RestRecordCursor implements RecordCursor {
 
         RestHttpClient client = new RestHttpClient(config);
         long start = System.nanoTime();
-        InputStream rawStream = client.fetch(uri);
+        InputStream rawStream = split.endpointDefinition().isPostQuery()
+                ? client.post(uri, split.requestBody())
+                : client.fetch(uri);
         CountingInputStream counting = new CountingInputStream(rawStream);
         JsonParser p = null;
         try {

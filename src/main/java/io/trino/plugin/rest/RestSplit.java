@@ -9,7 +9,16 @@ import io.trino.spi.connector.ConnectorSplit;
 // splits from coordinator to worker.
 public record RestSplit(
         @JsonProperty("uri") String uri,
-        @JsonProperty("endpointDefinition") EndpointDefinition endpointDefinition) implements ConnectorSplit {
+        @JsonProperty("endpointDefinition") EndpointDefinition endpointDefinition,
+        // Pre-built (placeholders already substituted) JSON POST body. Null for GET endpoints -
+        // endpointDefinition.isPostQuery() is the source of truth for which one a split needs.
+        @JsonProperty("requestBody") String requestBody) implements ConnectorSplit {
     @JsonCreator
     public RestSplit {}
+
+    // Convenience constructor for GET endpoints, so existing call sites don't need to pass a
+    // null requestBody explicitly.
+    public RestSplit(String uri, EndpointDefinition endpointDefinition) {
+        this(uri, endpointDefinition, null);
+    }
 }
