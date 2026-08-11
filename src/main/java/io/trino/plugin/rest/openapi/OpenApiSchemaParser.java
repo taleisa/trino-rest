@@ -3,6 +3,7 @@ package io.trino.plugin.rest.openapi;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import io.airlift.log.Logger;
@@ -37,7 +38,11 @@ public class OpenApiSchemaParser {
         for (Map.Entry<String, PathItem> pathItem : openAPI.getPaths().entrySet()) {
             String path = pathItem.getKey();
             String[] pathSeperatedBySlash = path.split("/");
-            String tableName = pathSeperatedBySlash[pathSeperatedBySlash.length - 1];
+            // Lowercase: Trino canonicalizes unquoted identifiers to lowercase on every lookup
+            // (both what SHOW TABLES displays and what getTableHandle() receives), so a
+            // mixed-case table name derived as-is from the URL path would show up in SHOW
+            // TABLES but never actually be reachable by any query.
+            String tableName = pathSeperatedBySlash[pathSeperatedBySlash.length - 1].toLowerCase(Locale.ROOT);
             // For now path parameters are not supported
             if (path.contains("{"))
                 continue;
