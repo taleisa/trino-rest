@@ -56,8 +56,10 @@ public class RestSplitManager implements ConnectorSplitManager {
             // to build a valid POST body - fail rather than send a request the target API
             // would reject anyway. This can happen even when the column IS mentioned in the
             // WHERE clause: TupleDomain (what applyFilter works with) can only express a
-            // conjunction of per-column domains, so a predicate on this column combined with
-            // OR against a *different* column is unpushable in its entirety, not just partially.
+            // conjunction of per-column domains, so a predicate on this column combined
+            // with
+            // OR against a *different* column is unpushable in its entirety, not just
+            // partially.
             throw new TrinoException(StandardErrorCode.GENERIC_USER_ERROR,
                     String.format(
                             "Query on %s is missing a resolvable predicate for required filter column(s): %s. "
@@ -67,7 +69,8 @@ public class RestSplitManager implements ConnectorSplitManager {
                             handle.schemaTableName().getTableName(), String.join(", ", missingRequiredFilters)));
         }
 
-        String requestBody = postBody.buildPostPayload(resolvedFilterValues);
-        return new FixedSplitSource(new RestSplit(uri, endpoint, requestBody));
+        Map<String, Object> requestBody = postBody.buildPostPayload(resolvedFilterValues);
+
+        return new FixedSplitSource(new RestSplit(uri, endpoint, PostBodyDefinition.serialize(requestBody)));
     }
 }

@@ -38,10 +38,10 @@ public class OpenApiSchemaParser {
         for (Map.Entry<String, PathItem> pathItem : openAPI.getPaths().entrySet()) {
             String path = pathItem.getKey();
             String[] pathSeperatedBySlash = path.split("/");
-            // Lowercase: Trino canonicalizes unquoted identifiers to lowercase on every lookup
-            // (both what SHOW TABLES displays and what getTableHandle() receives), so a
-            // mixed-case table name derived as-is from the URL path would show up in SHOW
-            // TABLES but never actually be reachable by any query.
+            // Lowercase: Trino canonicalizes unquoted identifiers to lowercase on every
+            // lookup (both what SHOW TABLES displays and what getTableHandle() receives),
+            // so a mixed-case table name derived as-is from the URL path would show up in
+            // SHOW TABLES but never actually be reachable by any query.
             String tableName = pathSeperatedBySlash[pathSeperatedBySlash.length - 1].toLowerCase(Locale.ROOT);
             // For now path parameters are not supported
             if (path.contains("{"))
@@ -73,8 +73,8 @@ public class OpenApiSchemaParser {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
             }
-            boolean isRootArray = "array".equals(getType(responseSchema));
-            return new EndpointDefinition(path, tableName, columns, isRootArray);
+            boolean isResponseRootArray = "array".equals(getType(responseSchema));
+            return new EndpointDefinition(path, tableName, columns, isResponseRootArray);
         } catch (Exception e) {
             log.warn(e, "Skipping %s: %s", path, e.getMessage());
             return null;
@@ -96,24 +96,27 @@ public class OpenApiSchemaParser {
                 log.warn("Skipping %s: POST operation has no JSON request body schema", path);
                 return null;
             }
-            if (!"object".equals(getType(requestSchema))) {
-                // Root-array (bulk) request bodies are a separate, not-yet-built feature - skip
-                // rather than build a PostBodyDefinition this connector can't yet query.
-                log.warn("Skipping %s: request body must be a JSON object", path);
+            String requestRootType = getType(requestSchema);
+            if ("object".equals(requestRootType) || "array".equals(requestRootType)) {
+
+                List<PostFilterDefinition> filters = new ArrayList<>();
+                Map<String, Object> requestBodyTemplate = buildRequestTemplate(
+                        "array".equals(requestRootType) ? requestSchema.getItems() : requestSchema, "", filters, path,
+                        List.of());
+                if (requestBodyTemplate == null) {
+                    // buildRequestTemplate already logged the specific reason.
+                    return null;
+                }
+
+                boolean isResponseRootArray = "array".equals(getType(responseSchema));
+                PostBodyDefinition postBody = "object".equals(requestRootType)
+                        ? new PostBodyDefinition(requestBodyTemplate, filters)
+                        : new PostBodyDefinition(requestBodyTemplate, filters, true);
+                return new EndpointDefinition(path, tableName, columns, isResponseRootArray, postBody);
+            } else {
+                log.warn("Skipping %s: request body must be a JSON object or array", path);
                 return null;
             }
-
-            List<PostFilterDefinition> filters = new ArrayList<>();
-            Map<String, Object> requestBodyTemplate = buildRequestTemplate(requestSchema, "", filters, path,
-                    List.of());
-            if (requestBodyTemplate == null) {
-                // buildRequestTemplate already logged the specific reason.
-                return null;
-            }
-
-            boolean isRootArray = "array".equals(getType(responseSchema));
-            PostBodyDefinition postBody = new PostBodyDefinition(requestBodyTemplate, filters);
-            return new EndpointDefinition(path, tableName, columns, isRootArray, postBody);
         } catch (Exception e) {
             log.warn(e, "Skipping %s: %s", path, e.getMessage());
             return null;

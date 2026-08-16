@@ -116,7 +116,7 @@ public class OpenApiSchemaParserTest {
         """);
 
     assertEquals(1, endpoints.size());
-    assertTrue(endpoints.get(0).isRootArray());
+    assertTrue(endpoints.get(0).isResponseRootArray());
     Map<String, String> columns = columnsOf(endpoints);
     assertEquals("BIGINT", columns.get("id"));
     assertEquals("VARCHAR", columns.get("name"));

@@ -1,6 +1,8 @@
 package io.trino.plugin.rest;
 
+import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.spi.connector.Connector;
+import io.trino.spi.connector.ConnectorIndexProvider;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorRecordSetProvider;
 import io.trino.spi.connector.ConnectorSession;
@@ -12,15 +14,18 @@ public class RestConnector implements Connector {
     private final RestMetadata metadata;
     private final RestSplitManager splitManager;
     private final RestRecordSetProvider recordSetProvider;
+    private final RestConfig config;
 
     public RestConnector(RestConfig config) throws Exception {
+        this.config = config;
         this.metadata = new RestMetadata(config);
         this.splitManager = new RestSplitManager(config, metadata.getTableNameToEndPointDefinition());
         this.recordSetProvider = new RestRecordSetProvider(config);
     }
 
     @Override
-    public ConnectorTransactionHandle beginTransaction(IsolationLevel isolationLevel, boolean readOnly, boolean autoCommit) {
+    public ConnectorTransactionHandle beginTransaction(IsolationLevel isolationLevel, boolean readOnly,
+            boolean autoCommit) {
         return RestTransactionHandle.INSTANCE;
     }
 
@@ -40,5 +45,17 @@ public class RestConnector implements Connector {
     }
 
     @Override
-    public void shutdown() {}
+    public void shutdown() {
+    }
+
+    @Override
+    public ConnectorIndexProvider getIndexProvider() {
+
+        return (transactionHandle, session, indexHandle, lookupSchema, outputSchema) -> {
+            RestIndexHandle handle = (RestIndexHandle) indexHandle;
+            EndpointDefinition definition = metadata.getTableNameToEndPointDefinition()
+                    .get(handle.schemaTableName().getTableName());
+            return new RestConnectorIndex(config, definition, lookupSchema, outputSchema);
+        };
+    }
 }

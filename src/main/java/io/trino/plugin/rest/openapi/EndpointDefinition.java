@@ -11,7 +11,7 @@ public record EndpointDefinition(
         @JsonProperty("path") String path,
         @JsonProperty("tableName") String tableName,
         @JsonProperty("columns") List<ColumnDefinition> columns,
-        @JsonProperty("isRootArray") boolean isRootArray,
+        @JsonProperty("isResponseRootArray") boolean isResponseRootArray,
         @JsonProperty("postBody") PostBodyDefinition postBody) {
     @JsonCreator
     public EndpointDefinition {
@@ -19,8 +19,9 @@ public record EndpointDefinition(
 
     // Convenience constructor for GET endpoints, so existing call sites don't need to pass a
     // null postBody explicitly.
-    public EndpointDefinition(String path, String tableName, List<ColumnDefinition> columns, boolean isRootArray) {
-        this(path, tableName, columns, isRootArray, null);
+    public EndpointDefinition(String path, String tableName, List<ColumnDefinition> columns,
+            boolean isResponseRootArray) {
+        this(path, tableName, columns, isResponseRootArray, null);
     }
 
     public boolean isPostQuery() {

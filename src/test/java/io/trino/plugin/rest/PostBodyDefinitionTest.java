@@ -71,8 +71,8 @@ public class PostBodyDefinitionTest {
     PostBodyDefinition postBody = new PostBodyDefinition(Map.of("ids", List.of("{{ids}}")), List.of(ids));
     Map<String, List<String>> resolved = Map.of("ids", List.of("1", "2", "3"));
 
-    String body = postBody.buildPostPayload(resolved);
+    Map<String, Object> body = postBody.buildPostPayload(resolved);
 
-    assertEquals("{\"ids\":[1,2,3]}", body);
+    assertEquals("{\"ids\":[1,2,3]}", PostBodyDefinition.serialize(body));
   }
 }

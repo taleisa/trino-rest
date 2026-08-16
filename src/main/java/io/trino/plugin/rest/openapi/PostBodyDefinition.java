@@ -12,9 +12,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 public record PostBodyDefinition(
         @JsonProperty("requestBody") Map<String, Object> requestBody,
-        @JsonProperty("filters") List<PostFilterDefinition> filters) {
+        @JsonProperty("filters") List<PostFilterDefinition> filters,
+        @JsonProperty("isRootArray") boolean isRootArray) {
     @JsonCreator
     public PostBodyDefinition {
+    }
+
+    public PostBodyDefinition(Map<String, Object> requestBody, List<PostFilterDefinition> filters) {
+        this(requestBody, filters, false);
     }
 
     // NON_NULL: a template leaf left as null (OpenApiSchemaParser's placeholder for
@@ -24,7 +29,7 @@ public record PostBodyDefinition(
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     @SuppressWarnings("unchecked")
-    public String buildPostPayload(Map<String, List<String>> resolvedValues) {
+    public Map<String, Object> buildPostPayload(Map<String, List<String>> resolvedValues) {
         // Make a copy of the request payload template to substitute values in place.
         Map<String, Object> copiedRequestBody = MAPPER.convertValue(requestBody,
                 new TypeReference<Map<String, Object>>() {
@@ -57,7 +62,7 @@ public record PostBodyDefinition(
                         castToExpectedType(trinoType, entry.getValue().get(0)));
             }
         }
-        return serialize(copiedRequestBody);
+        return copiedRequestBody;
     }
 
     private static Object castToExpectedType(String trinoType, String value) {
@@ -74,10 +79,10 @@ public record PostBodyDefinition(
                 .filter(filter -> filter.name().equals(name))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
-                        "Template placeholder {{" + name + "}} has no matching filter definition"));
+                        "No filter definition found for resolved value key '" + name + "'"));
     }
 
-    private static String serialize(Object filled) {
+    public static String serialize(Object filled) {
         try {
             return MAPPER.writeValueAsString(filled);
         } catch (Exception e) {

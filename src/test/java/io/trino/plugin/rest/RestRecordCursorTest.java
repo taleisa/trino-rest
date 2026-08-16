@@ -46,8 +46,9 @@ public class RestRecordCursorTest {
         "rest.baseUrl", wm.baseUrl()));
   }
 
-  private RecordCursor cursorFor(String path, boolean isRootArray, List<ColumnMetadata> columns) throws Exception {
-    EndpointDefinition endpoint = new EndpointDefinition(path, "items", List.of(), isRootArray);
+  private RecordCursor cursorFor(String path, boolean isResponseRootArray, List<ColumnMetadata> columns)
+      throws Exception {
+    EndpointDefinition endpoint = new EndpointDefinition(path, "items", List.of(), isResponseRootArray);
     RestSplit split = new RestSplit(wm.baseUrl() + path, endpoint);
     RestRecordSet recordSet = new RestRecordSet(split, config(), columns);
     return recordSet.cursor();

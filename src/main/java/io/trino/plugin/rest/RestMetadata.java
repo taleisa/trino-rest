@@ -22,6 +22,7 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ConnectorMetadata;
+import io.trino.spi.connector.ConnectorResolvedIndex;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
@@ -262,8 +263,50 @@ public class RestMetadata implements ConnectorMetadata {
         return false;
     }
 
-}
+    // When a join is done that includes one of our connector tables, trino asks if
+    // our connector can handle this join. If we can handle it we return
+    // ConnectorResolvedIndex. If not, Optional.empty()
+    @Override
+    public Optional<ConnectorResolvedIndex> resolveIndex(ConnectorSession session, ConnectorTableHandle tableHandle,
+            Set<ColumnHandle> indexableColumns, Set<ColumnHandle> outputColumns,
+            TupleDomain<ColumnHandle> tupleDomain) {
+        RestTableHandle handle = (RestTableHandle) tableHandle;
+        EndpointDefinition endpointDefinition = tableNameToEndPointDefinition
+                .get(handle.schemaTableName().getTableName());
 
-// select * from rest.default.product_search where request_filter_category =
-// 'furniture' and request_filter_ids in (3,4,8) and (name = 'Pro Widget' or
-// name = 'Compact Gizmo' or request_filter_ids = 1) limit 5;
+        if (endpointDefinition == null || !endpointDefinition.isPostQuery()
+                || !endpointDefinition.postBody().isRootArray()) {
+            return Optional.empty();
+        }
+
+        Set<String> indexableColumnNames = indexableColumns.stream()
+                .map(columnHandle -> ((RestColumnHandle) columnHandle).columnName())
+                .collect(Collectors.toSet());
+
+        Set<String> knownKeyColumnNames = endpointDefinition.postBody().filters().stream()
+                .map(PostFilterDefinition::columnName)
+                .collect(Collectors.toSet());
+        // Make sure all indexable columns (in join statement) are columns for this
+        // endpoint.
+        boolean allIndexableAreKnownKeys = knownKeyColumnNames.containsAll(indexableColumnNames);
+        boolean allRequiredKeysCovered = endpointDefinition.postBody().filters().stream()
+                .filter(PostFilterDefinition::required)
+                .allMatch(postFilterDefinition -> indexableColumnNames.contains(postFilterDefinition.columnName()));
+
+        if (!allIndexableAreKnownKeys || !allRequiredKeysCovered) {
+            // This table has no valid non-index query path (RestSplitManager.getSplits()
+            // can only resolve required filters from literal WHERE predicates, never from
+            // join correlations, so a mismatched join here can never succeed some other
+            // way - fail now with a clear reason instead of letting it fall through to a
+            // confusing "missing resolvable predicate" error later.
+            throw new TrinoException(StandardErrorCode.GENERIC_USER_ERROR,
+                    String.format(
+                            "Table %s can only be joined using exactly its required key column(s) %s as the join "
+                                    + "condition; got join column(s) %s.",
+                            handle.schemaTableName().getTableName(), knownKeyColumnNames, indexableColumnNames));
+        }
+
+        return Optional.of(new ConnectorResolvedIndex(new RestIndexHandle(handle.schemaTableName()), tupleDomain));
+    }
+
+}

@@ -22,7 +22,7 @@ public class RestRecordCursor implements RecordCursor {
 
     private final List<ColumnMetadata> columns;
     private final String uri;
-    private final boolean isRootArray;
+    private final boolean isResponseRootArray;
     private final JsonParser parser;
     private final CountingInputStream countingStream;
 
@@ -33,7 +33,7 @@ public class RestRecordCursor implements RecordCursor {
     public RestRecordCursor(RestSplit split, RestConfig config, List<ColumnMetadata> columns) throws IOException {
         this.columns = columns;
         this.uri = split.uri();
-        this.isRootArray = split.endpointDefinition().isRootArray();
+        this.isResponseRootArray = split.endpointDefinition().isResponseRootArray();
 
         RestHttpClient client = new RestHttpClient(config);
         long start = System.nanoTime();
@@ -44,7 +44,7 @@ public class RestRecordCursor implements RecordCursor {
         JsonParser p = null;
         try {
             p = MAPPER.getFactory().createParser(counting);
-            if (isRootArray) {
+            if (isResponseRootArray) {
                 JsonToken token = p.nextToken();
                 if (token != JsonToken.START_ARRAY) {
                     throw new RuntimeException(
@@ -87,7 +87,7 @@ public class RestRecordCursor implements RecordCursor {
     public boolean advanceNextPosition() {
         long start = System.nanoTime();
         try {
-            if (isRootArray) {
+            if (isResponseRootArray) {
                 JsonToken token = parser.nextToken();
                 if (token == null || token == JsonToken.END_ARRAY) {
                     currentRow = null;
