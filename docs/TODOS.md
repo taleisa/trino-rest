@@ -38,3 +38,26 @@ query supplies a different one, the request is sent as-is and likely rejected by
 there's currently no way for the connector to catch or convert this. Fixing it would mean reading
 `format` during parsing and, at minimum, validating (or reformatting) values against it before
 they're sent.
+
+## Increase visibility and stats for the REST connector
+Beyond `RestRecordCursor.getCompletedBytes()`/`getReadTimeNanos()` (which Trino surfaces in its
+own query stats), there's no way to see what the connector is actually doing over HTTP -
+confirmed directly while testing the index-join work, where the only way to count how many
+`POST /enrich` requests a query issued was to grep the target API's own request log, since
+neither Trino's query stats nor `EXPLAIN ANALYZE` expose a request/batch count for the
+`IndexSource` stage. Worth adding real visibility: request counts, per-batch timing, batch sizes
+for `RestConnectorIndex.lookup()`. This includes what actually surfaces in Trino's own Web UI
+(the query details/live plan page at `:8080/ui`) - operator-level stats, split info
+(`ConnectorSplit`/index-source stage), not just JMX or logs - since that's where anyone actually
+running a query would look first, not an external log file.
+
+## Clear error message for non-JOIN queries against bulk-lookup endpoints
+A bulk-lookup endpoint (`PostBodyDefinition.isRootArray() == true`) is only queryable via an
+index-join (`JOIN ... ON`) - there's no valid way to serve a plain `SELECT * FROM
+rest.default.enrich` with no join, since there's no `WHERE`-resolved value to build the request
+array from. Right now that case isn't special-cased: it falls through to
+`RestSplitManager.getSplits()`'s ordinary filter-POST path, which throws the generic "missing
+resolvable predicate for required filter column(s)" error - technically correct, but confusing
+for a table that was never queryable this way in the first place. Should fail earlier and more
+specifically (e.g. in `RestMetadata`) with a message that says outright: "this table can only be
+queried via a JOIN using its required key columns."
