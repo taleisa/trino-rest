@@ -165,8 +165,10 @@ public class OpenApiSchemaParserTest {
 
   @Test
   void topLevelOneOfSchemaHasNoColumns() throws Exception {
-    // A polymorphic response described with oneOf (common for endpoints that can return
-    // different shapes, e.g. a success object or an error object) has no top-level "type",
+    // A polymorphic response described with oneOf (common for endpoints that can
+    // return
+    // different shapes, e.g. a success object or an error object) has no top-level
+    // "type",
     // so there are no properties to turn into columns.
     List<ColumnDefinition> columns = extractColumns(schemaOf("""
         {
@@ -177,6 +179,64 @@ public class OpenApiSchemaParserTest {
         }
         """));
     assertTrue(columns.isEmpty());
+  }
+
+  @Test
+  void rootPathUsesSpecTitleAsTableName() throws Exception {
+    // "/".split("/") is a zero-length array in Java (no non-empty segments to keep), so naively
+    // taking the last segment as the table name throws ArrayIndexOutOfBoundsException. A root
+    // path is a legitimate endpoint though - it should be accepted, not skipped or crashed on -
+    // and since it has no path segment to derive a name from, it falls back to the spec's own
+    // info.title, lowercased with whitespace turned into underscores (matching the underscore
+    // convention already used for nested column names elsewhere in this parser).
+    String spec = """
+        {
+          "openapi": "3.1.0",
+          "info": { "title": "My Test API", "version": "1.0" },
+          "paths": {
+            "/": {
+              "get": {
+                "responses": {
+                  "200": {
+                    "description": "OK",
+                    "content": {
+                      "application/json": {
+                        "schema": { "type": "object", "properties": { "status": { "type": "string" } } }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/items": {
+              "get": {
+                "responses": {
+                  "200": {
+                    "description": "OK",
+                    "content": {
+                      "application/json": {
+                        "schema": { "type": "object", "properties": { "id": { "type": "integer" } } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+    wm.stubFor(get("/spec").willReturn(okJson(spec)));
+    RestConfig config = new RestConfig(Map.of(
+        "rest.token", "token",
+        "rest.specUrl", wm.baseUrl() + "/spec",
+        "rest.baseUrl", ""));
+
+    List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
+
+    assertTrue(endpoints.stream().anyMatch(e -> "my_test_api".equals(e.tableName())),
+        "the / endpoint should be discovered as a table named after the spec's info.title");
+    assertTrue(endpoints.stream().anyMatch(e -> "items".equals(e.tableName())),
+        "the well-formed /items endpoint should still be discovered alongside it");
   }
 
 }
