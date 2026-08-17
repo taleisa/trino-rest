@@ -74,7 +74,11 @@ which internal method gets called when.
 mvn clean package
 ```
 
-Produces a `trino-plugin` artifact under `target/`. Run the test suite with:
+Produces several things under `target/`, but only one matters for deployment:
+`target/trino-rest-<version>.zip` - the connector's own jar plus every runtime dependency jar,
+already laid out as the plugin directory Trino expects. (`target/trino-rest-<version>.jar` is
+just this project's own classes with no dependencies - not usable on its own.) Run the test suite
+with:
 
 ```bash
 mvn test
@@ -82,8 +86,8 @@ mvn test
 
 ## Configuring a catalog
 
-Create a catalog properties file (e.g. `etc/catalog/mycatalog.properties`) pointing at the
-connector and the target API's OpenAPI spec:
+Create a catalog properties file (e.g. `mycatalog.properties`) pointing at the connector and the
+target API's OpenAPI spec:
 
 ```properties
 connector.name=rest
@@ -103,9 +107,35 @@ HTTP:
 rest.specPath=/etc/trino/specs/example-openapi.json
 ```
 
-Deploy the built plugin and the properties file to Trino, then restart (or add the catalog before
-first boot, depending on your `CATALOG_MANAGEMENT` mode) - tables show up automatically under
-`mycatalog.default`, one per discovered endpoint.
+## Deploying
+
+Every Trino connector needs two things in place: the plugin's jars, and the catalog properties
+file from above. Plugins are only loaded when the Trino process starts, so a restart is required
+after adding this connector for the first time (and again any time the jar changes), regardless
+of `CATALOG_MANAGEMENT` mode.
+
+**Docker-based Trino** (e.g. the official `trinodb/trino` image):
+
+```bash
+# unzip the plugin build into its own directory, then copy the whole thing in
+unzip target/trino-rest-<version>.zip -d /tmp/trino-rest-plugin
+docker cp /tmp/trino-rest-plugin/trino-rest-<version> <container>:/usr/lib/trino/plugin/rest
+
+docker cp mycatalog.properties <container>:/etc/trino/catalog/mycatalog.properties
+
+docker restart <container>
+```
+
+**Non-Docker installs**: unzip `target/trino-rest-<version>.zip` into a `rest/` directory under
+wherever `plugin.dir` points (commonly `/usr/lib/trino/plugin/` or `<install-root>/plugin/`), put
+the catalog properties file under `<install-root>/etc/catalog/`, then restart the Trino service.
+
+Either way, confirm it picked up correctly before troubleshooting further:
+
+```sql
+SHOW CATALOGS;                     -- should list your catalog name
+SHOW TABLES FROM mycatalog.default; -- one row per discovered endpoint
+```
 
 ## More detail
 
