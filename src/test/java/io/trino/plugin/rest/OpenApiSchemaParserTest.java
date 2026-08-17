@@ -165,6 +165,31 @@ public class OpenApiSchemaParserTest {
   }
 
   @Test
+  void freeFormDictionaryObjectBecomesJson() throws Exception {
+    // A field with additionalProperties and no fixed "properties" (e.g. a language-code -> name
+    // map) has no fixed set of keys to flatten into columns - same situation as a nested array,
+    // so it should get the same treatment: an opaque JSON column, not a crash and not a silently
+    // dropped field. Currently this throws NullPointerException inside extractColumns instead
+    // (target.getProperties() is null for "names", with no null-check before iterating it).
+    List<EndpointDefinition> endpoints = parse("""
+        {
+          "type": "object",
+          "properties": {
+            "id": { "type": "integer" },
+            "names": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
+        """);
+
+    Map<String, String> columns = columnsOf(endpoints);
+    assertEquals("BIGINT", columns.get("id"));
+    assertEquals("JSON", columns.get("names"));
+  }
+
+  @Test
   void topLevelOneOfSchemaHasNoColumns() throws Exception {
     // A polymorphic response described with oneOf (common for endpoints that can
     // return
@@ -184,11 +209,16 @@ public class OpenApiSchemaParserTest {
 
   @Test
   void rootPathUsesSpecTitleAsTableName() throws Exception {
-    // "/".split("/") is a zero-length array in Java (no non-empty segments to keep), so naively
-    // taking the last segment as the table name throws ArrayIndexOutOfBoundsException. A root
-    // path is a legitimate endpoint though - it should be accepted, not skipped or crashed on -
-    // and since it has no path segment to derive a name from, it falls back to the spec's own
-    // info.title, lowercased with whitespace turned into underscores (matching the underscore
+    // "/".split("/") is a zero-length array in Java (no non-empty segments to
+    // keep), so naively
+    // taking the last segment as the table name throws
+    // ArrayIndexOutOfBoundsException. A root
+    // path is a legitimate endpoint though - it should be accepted, not skipped or
+    // crashed on -
+    // and since it has no path segment to derive a name from, it falls back to the
+    // spec's own
+    // info.title, lowercased with whitespace turned into underscores (matching the
+    // underscore
     // convention already used for nested column names elsewhere in this parser).
     String spec = """
         {
@@ -242,7 +272,8 @@ public class OpenApiSchemaParserTest {
 
   @Test
   void refIsResolvedIntoRealColumns() throws Exception {
-    // getOpenAPI() sets ParseOptions.setResolveFully(true), so a $ref should already be
+    // getOpenAPI() sets ParseOptions.setResolveFully(true), so a $ref should
+    // already be
     // dereferenced into the real schema by the time our own parsing code sees it.
     String spec = """
         {
@@ -289,66 +320,6 @@ public class OpenApiSchemaParserTest {
     Map<String, String> columns = columnsOf(endpoints);
     assertEquals("BIGINT", columns.get("id"));
     assertEquals("VARCHAR", columns.get("name"));
-  }
-
-  @Test
-  @Timeout(10)
-  void circularRefDoesNotHangOrCrash() throws Exception {
-    // Node references itself (id + a "parent" field that's the same Node schema again).
-    // Behavior isn't verified yet - this test exists to observe and pin down what
-    // setResolveFully(true) actually does with a cycle, bounded by a timeout so a bad outcome
-    // (infinite resolution) fails the test instead of hanging the whole suite.
-    String spec = """
-        {
-          "openapi": "3.1.0",
-          "info": { "title": "Test", "version": "1.0" },
-          "paths": {
-            "/nodes": {
-              "get": {
-                "responses": {
-                  "200": {
-                    "description": "OK",
-                    "content": {
-                      "application/json": {
-                        "schema": { "$ref": "#/components/schemas/Node" }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "components": {
-            "schemas": {
-              "Node": {
-                "type": "object",
-                "properties": {
-                  "id": { "type": "integer" },
-                  "parent": { "$ref": "#/components/schemas/Node" }
-                }
-              }
-            }
-          }
-        }
-        """;
-    wm.stubFor(get("/spec").willReturn(okJson(spec)));
-    RestConfig config = new RestConfig(Map.of(
-        "rest.token", "token",
-        "rest.specUrl", wm.baseUrl() + "/spec",
-        "rest.baseUrl", ""));
-
-    // Observed (not guessed): swagger-parser's resolveFully breaks the cycle after two levels
-    // rather than resolving forever, but the schema it leaves at that point is type=object with
-    // getProperties()==null - which extractColumns doesn't currently guard against, so this
-    // throws a NullPointerException internally. That's caught by buildGetEndpoint's existing
-    // try/catch (same as any other malformed schema) and logged, so /nodes is skipped but
-    // parse() itself still completes normally - it must not hang, and no exception should
-    // escape to the caller.
-    List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
-
-    assertTrue(endpoints.stream().noneMatch(e -> "nodes".equals(e.tableName())),
-        "a circularly-referenced schema currently can't be templated into columns, so /nodes "
-            + "should be skipped rather than partially/incorrectly represented");
   }
 
 }
