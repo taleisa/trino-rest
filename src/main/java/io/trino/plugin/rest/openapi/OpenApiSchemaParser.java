@@ -231,6 +231,17 @@ public class OpenApiSchemaParser {
             Schema target = "array".equals(schemaType) ? schema.getItems() : schema;
             @SuppressWarnings({ "rawtypes", "unchecked" })
             Map<String, Schema> map = (Map<String, Schema>) target.getProperties();
+            if (map == null) {
+                if (isTopLevel) {
+                    log.warn("Skipping %s: top-level object schema has no properties to turn into columns", path);
+                    return columns;
+                }
+                // Free-form/dictionary object (additionalProperties, no fixed keys) - same
+                // treatment as a nested array: represent it as an opaque JSON column instead of
+                // crashing or losing it.
+                columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1), "JSON"));
+                return columns;
+            }
             // Arrays not on top level is mapped to JSON object
             for (Map.Entry<String, Schema> entry : map.entrySet()) {
                 Schema innerSchema = entry.getValue();
