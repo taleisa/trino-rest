@@ -37,12 +37,17 @@ public class OpenApiSchemaParser {
         List<EndpointDefinition> endPointDefinitions = new ArrayList<>();
         for (Map.Entry<String, PathItem> pathItem : openAPI.getPaths().entrySet()) {
             String path = pathItem.getKey();
-            String[] pathSeperatedBySlash = path.split("/");
-            // Lowercase: Trino canonicalizes unquoted identifiers to lowercase on every
-            // lookup (both what SHOW TABLES displays and what getTableHandle() receives),
-            // so a mixed-case table name derived as-is from the URL path would show up in
-            // SHOW TABLES but never actually be reachable by any query.
-            String tableName = pathSeperatedBySlash[pathSeperatedBySlash.length - 1].toLowerCase(Locale.ROOT);
+            String tableName;
+            if (path.equals("/")) {
+                if (openAPI.getInfo() == null || openAPI.getInfo().getTitle() == null) {
+                    log.warn("Skipping /: no info.title to derive a table name from");
+                    continue;
+                }
+                tableName = openAPI.getInfo().getTitle().strip().replaceAll(" ", "_").toLowerCase(Locale.ROOT);
+            } else {
+                String[] pathSeperatedBySlash = path.split("/");
+                tableName = pathSeperatedBySlash[pathSeperatedBySlash.length - 1].toLowerCase(Locale.ROOT);
+            }
             // For now path parameters are not supported
             if (path.contains("{"))
                 continue;
