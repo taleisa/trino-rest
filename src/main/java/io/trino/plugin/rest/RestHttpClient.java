@@ -38,8 +38,11 @@ public class RestHttpClient {
     }
 
     private HttpRequest.Builder authorizedRequest(String url) {
-        return HttpRequest.newBuilder().uri(URI.create(url))
-                .header("Authorization", String.format("Bearer %s", config.getToken()));
+        HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(url));
+        if (config.getToken() != null) {
+            builder.header("Authorization", String.format("Bearer %s", config.getToken()));
+        }
+        return builder;
     }
 
     private InputStream send(HttpRequest request, String url) {
