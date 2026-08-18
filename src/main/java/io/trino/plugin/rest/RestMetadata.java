@@ -125,12 +125,29 @@ public class RestMetadata implements ConnectorMetadata {
         String tableName = handle.schemaTableName().getTableName();
         EndpointDefinition definition = tableNameToEndPointDefinition.getOrDefault(tableName, null);
         if (definition != null) {
+            boolean isJoinOnly = definition.isPostQuery() && definition.postBody().isRootArray();
+            // A filter with a responseColumn is exposed only once, below, under that column's own
+            // name - map it here so that column can carry the "this is also a required/optional
+            // JOIN key" comment a plain response column otherwise wouldn't have any reason to show.
+            Map<ColumnDefinition, PostFilterDefinition> responseColumnToFilter = definition.isPostQuery()
+                    ? definition.postBody().filters().stream()
+                            .filter(filter -> filter.responseColumn() != null)
+                            .collect(Collectors.toMap(PostFilterDefinition::responseColumn, filter -> filter))
+                    : Map.of();
+
             List<ColumnMetadata> columnMetadata = new ArrayList<>();
             for (ColumnDefinition col : definition.columns()) {
-                columnMetadata.add(ColumnMetadata.builder()
+                ColumnMetadata.Builder columnBuilder = ColumnMetadata.builder()
                         .setName(col.name())
-                        .setType(TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType()))
-                        .build());
+                        .setType(TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType()));
+                PostFilterDefinition matchedFilter = responseColumnToFilter.get(col);
+                if (matchedFilter != null) {
+                    columnBuilder.setComment(Optional.of(String.format(
+                            "%s JOIN key (%s) - usable only via JOIN, not WHERE",
+                            matchedFilter.required() ? "required" : "optional",
+                            matchedFilter.isArray() ? "accepts multiple values via IN" : "single value only, no IN")));
+                }
+                columnMetadata.add(columnBuilder.build());
             }
             // 'Virtual' columns used to indicate that these are columns that will be
             // handled solely by the api not trino
@@ -139,9 +156,10 @@ public class RestMetadata implements ConnectorMetadata {
                     if (filter.responseColumn() != null) {
                         continue;
                     }
-                    String comment = String.format("%s POST filter (%s)",
+                    String comment = String.format("%s POST filter (%s)%s",
                             filter.required() ? "required" : "optional",
-                            filter.isArray() ? "accepts multiple values via IN" : "single value only, no IN");
+                            filter.isArray() ? "accepts multiple values via IN" : "single value only, no IN",
+                            isJoinOnly ? " - usable only via JOIN, not WHERE" : "");
                     columnMetadata.add(ColumnMetadata.builder()
                             .setName(filter.columnName())
                             .setType(TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType()))
@@ -149,7 +167,11 @@ public class RestMetadata implements ConnectorMetadata {
                             .build());
                 }
             }
-            return new ConnectorTableMetadata(handle.schemaTableName(), columnMetadata);
+            Optional<String> tableComment = isJoinOnly
+                    ? Optional.of("Bulk-lookup endpoint - queryable only via JOIN, using its required key "
+                            + "column(s) as the join condition. No plain SELECT/WHERE query path exists.")
+                    : Optional.empty();
+            return new ConnectorTableMetadata(handle.schemaTableName(), columnMetadata, Map.of(), tableComment);
         } else {
             throw new NoSuchElementException(String.format("No table with name %s exists within endpoint", tableName));
         }
