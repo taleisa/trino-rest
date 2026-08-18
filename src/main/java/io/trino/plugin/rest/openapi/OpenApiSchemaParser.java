@@ -73,7 +73,7 @@ public class OpenApiSchemaParser {
         try {
             Schema responseSchema = getJsonResponseSchema(get);
             List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, "", columns, path);
+            extractColumns(responseSchema, columns, new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -90,7 +90,7 @@ public class OpenApiSchemaParser {
         try {
             Schema responseSchema = getJsonResponseSchema(post);
             List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, "", columns, path);
+            extractColumns(responseSchema, columns, new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -222,16 +222,16 @@ public class OpenApiSchemaParser {
      * Extract columns from OPENAPI schema, any non top level array is treated as a
      * json object.
      */
-    private static List<ColumnDefinition> extractColumns(Schema schema, String prefix, List<ColumnDefinition> columns,
-            String path) {
-        Boolean isTopLevel = prefix.isEmpty();
+    private static List<ColumnDefinition> extractColumns(Schema schema, List<ColumnDefinition> columns,
+            List<String> path) {
+        Boolean isTopLevel = path.isEmpty();
         String schemaType = getType(schema);
         // If type is object or non top level array
         if ("object".equals(schemaType) || ("array".equals(schemaType) && isTopLevel)) {
             Schema target = "array".equals(schemaType) ? schema.getItems() : schema;
             @SuppressWarnings({ "rawtypes", "unchecked" })
-            Map<String, Schema> map = (Map<String, Schema>) target.getProperties();
-            if (map == null) {
+            Map<String, Schema> properties = (Map<String, Schema>) target.getProperties();
+            if (properties == null) {
                 if (isTopLevel) {
                     log.warn("Skipping %s: top-level object schema has no properties to turn into columns", path);
                     return columns;
@@ -239,15 +239,16 @@ public class OpenApiSchemaParser {
                 // Free-form/dictionary object (additionalProperties, no fixed keys) - same
                 // treatment as a nested array: represent it as an opaque JSON column instead of
                 // crashing or losing it.
-                columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1), "JSON"));
+                columns.add(new ColumnDefinition("JSON", path));
                 return columns;
             }
             // Arrays not on top level is mapped to JSON object
-            for (Map.Entry<String, Schema> entry : map.entrySet()) {
-                Schema innerSchema = entry.getValue();
-                String name = prefix + entry.getKey();
-                columns = extractColumns(innerSchema, name + "_", columns, path);
-
+            for (Map.Entry<String, Schema> property : properties.entrySet()) {
+                Schema innerSchema = property.getValue();
+                // New list to avoid adding to the shared list (lists are passed by reference)
+                List<String> fieldPath = new ArrayList<>(path);
+                fieldPath.add(property.getKey());
+                columns = extractColumns(innerSchema, columns, fieldPath);
             }
         } else if (isTopLevel) {
             // A top-level schema with no resolvable type (e.g. a oneOf/anyOf polymorphic
@@ -255,8 +256,7 @@ public class OpenApiSchemaParser {
             log.warn("Skipping %s: top-level schema has no resolvable type (e.g. oneOf/anyOf)", path);
         } else {
             // `prefix` is passed with `_` remove it as this will be a column name.
-            columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1),
-                    TYPE_TO_TRINO_TYPE.get(schemaType)));
+            columns.add(new ColumnDefinition(TYPE_TO_TRINO_TYPE.get(schemaType), path));
         }
         return columns;
     }

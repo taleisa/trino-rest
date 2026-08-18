@@ -12,6 +12,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 
+import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.RecordCursor;
@@ -39,6 +40,14 @@ public class RestRecordCursorTest {
       new ColumnMetadata("active", BooleanType.BOOLEAN),
       new ColumnMetadata("score", DoubleType.DOUBLE));
 
+  // A real parsed endpoint's columns() carries each column's real (here: flat, single-segment)
+  // nested path - RestRecordCursor now reads values by walking that path, not the flat name.
+  private static final List<ColumnDefinition> COLUMN_DEFINITIONS = List.of(
+      new ColumnDefinition("BIGINT", List.of("id")),
+      new ColumnDefinition("VARCHAR", List.of("name")),
+      new ColumnDefinition("BOOLEAN", List.of("active")),
+      new ColumnDefinition("DOUBLE", List.of("score")));
+
   private RestConfig config() {
     return new RestConfig(Map.of(
         "rest.token", "token",
@@ -48,7 +57,12 @@ public class RestRecordCursorTest {
 
   private RecordCursor cursorFor(String path, boolean isResponseRootArray, List<ColumnMetadata> columns)
       throws Exception {
-    EndpointDefinition endpoint = new EndpointDefinition(path, "items", List.of(), isResponseRootArray);
+    return cursorFor(path, isResponseRootArray, columns, COLUMN_DEFINITIONS);
+  }
+
+  private RecordCursor cursorFor(String path, boolean isResponseRootArray, List<ColumnMetadata> columns,
+      List<ColumnDefinition> definitionColumns) throws Exception {
+    EndpointDefinition endpoint = new EndpointDefinition(path, "items", definitionColumns, isResponseRootArray);
     RestSplit split = new RestSplit(wm.baseUrl() + path, endpoint);
     RestRecordSet recordSet = new RestRecordSet(split, config(), columns);
     return recordSet.cursor();
@@ -82,6 +96,34 @@ public class RestRecordCursorTest {
       assertEquals(3, cursor.getLong(0));
 
       assertFalse(cursor.advanceNextPosition());
+    } finally {
+      cursor.close();
+    }
+  }
+
+  @Test
+  void nestedColumnValueIsReadCorrectly() throws Exception {
+    // The column name "address_city" reflects a nested field ({"address": {"city": ...}}), so
+    // its real path (as a real parsed endpoint's columns() would carry it) is ["address",
+    // "city"], not the flat name itself.
+    List<ColumnMetadata> columns = List.of(
+        new ColumnMetadata("id", BigintType.BIGINT),
+        new ColumnMetadata("address_city", VarcharType.VARCHAR));
+    List<ColumnDefinition> definitionColumns = List.of(
+        new ColumnDefinition("BIGINT", List.of("id")),
+        new ColumnDefinition("VARCHAR", List.of("address", "city")));
+    wm.stubFor(get("/nested").willReturn(okJson("""
+        [
+          {"id": 1, "address": {"city": "NYC"}}
+        ]
+        """)));
+
+    RecordCursor cursor = cursorFor("/nested", true, columns, definitionColumns);
+    try {
+      assertTrue(cursor.advanceNextPosition());
+      assertEquals(1, cursor.getLong(0));
+      assertFalse(cursor.isNull(1), "address_city should be populated from the nested response field");
+      assertEquals("NYC", cursor.getSlice(1).toStringUtf8());
     } finally {
       cursor.close();
     }

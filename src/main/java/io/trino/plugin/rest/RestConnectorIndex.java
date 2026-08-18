@@ -8,9 +8,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.plugin.rest.openapi.PostBodyDefinition;
 import io.trino.plugin.rest.openapi.PostFilterDefinition;
@@ -46,6 +47,8 @@ public class RestConnectorIndex implements ConnectorIndex {
     public ConnectorPageSource lookup(RecordSet recordSet) {
         Map<String, PostFilterDefinition> columnNameToFilter = definition.postBody().filters().stream()
                 .collect(Collectors.toMap(PostFilterDefinition::columnName, filter -> filter));
+        Map<String, ColumnDefinition> columnNameToDefinition = definition.columns().stream()
+                .collect(Collectors.toMap(ColumnDefinition::name, column -> column));
 
         List<Map<String, Object>> payloads = new ArrayList<>();
         RecordCursor cursor = recordSet.cursor();
@@ -62,10 +65,9 @@ public class RestConnectorIndex implements ConnectorIndex {
         String uri = config.getBaseUrl() + definition.path();
         InputStream response = new RestHttpClient(config).post(uri, PostBodyDefinition.serialize(payloads));
 
-        List<Map<String, Object>> responseRows;
+        JsonNode responseRows;
         try {
-            responseRows = MAPPER.readValue(response, new TypeReference<List<Map<String, Object>>>() {
-            });
+            responseRows = MAPPER.readTree(response);
         } catch (IOException e) {
             throw new RuntimeException(String.format("Failed to parse index lookup response from %s", uri), e);
         }
@@ -75,15 +77,26 @@ public class RestConnectorIndex implements ConnectorIndex {
                 .collect(Collectors.toList());
 
         List<List<Object>> records = new ArrayList<>();
-        for (Map<String, Object> responseRow : responseRows) {
+        for (JsonNode responseRow : responseRows) {
             List<Object> record = new ArrayList<>();
             for (ColumnHandle columnHandle : outputSchema) {
                 RestColumnHandle restColumnHandle = (RestColumnHandle) columnHandle;
-                // Key columns are looked up under their raw filter name - the target API only
-                // ever echoes back "product_name", never our Trino-side "request_filter_product_name".
                 PostFilterDefinition filter = columnNameToFilter.get(restColumnHandle.columnName());
-                String responseFieldName = filter != null ? filter.name() : restColumnHandle.columnName();
-                Object rawValue = responseRow.get(responseFieldName);
+                JsonNode rawValue;
+                if (filter == null) {
+                    // Value columns are looked up by walking their real nested path in the
+                    // response - the flat, underscore-joined column name (e.g. "address_city")
+                    // is never itself a key in the response.
+                    ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
+                    rawValue = column != null
+                            ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
+                            : null;
+                } else {
+                    // Key columns are looked up under their raw filter name - the target API only
+                    // ever echoes back "product_name", never our Trino-side
+                    // "request_filter_product_name".
+                    rawValue = responseRow.get(filter.name());
+                }
                 record.add(normalizeForType(restColumnHandle.columnType(), rawValue));
             }
             records.add(record);
@@ -101,19 +114,19 @@ public class RestConnectorIndex implements ConnectorIndex {
         };
     }
 
-    private static Object normalizeForType(Type type, Object rawValue) {
-        if (rawValue == null) {
+    private static Object normalizeForType(Type type, JsonNode rawValue) {
+        if (rawValue == null || rawValue.isNull()) {
             return null;
         }
         if (type instanceof BigintType) {
-            return ((Number) rawValue).longValue();
+            return rawValue.asLong();
         }
         if (type instanceof DoubleType) {
-            return ((Number) rawValue).doubleValue();
+            return rawValue.asDouble();
         }
         if (type instanceof BooleanType) {
-            return rawValue;
+            return rawValue.asBoolean();
         }
-        return rawValue.toString(); // VARCHAR
+        return rawValue.asText(); // VARCHAR
     }
 }

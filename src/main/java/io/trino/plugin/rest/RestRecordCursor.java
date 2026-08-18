@@ -3,6 +3,8 @@ package io.trino.plugin.rest;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -12,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.RecordCursor;
 import io.trino.spi.type.Type;
@@ -21,6 +24,7 @@ public class RestRecordCursor implements RecordCursor {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final List<ColumnMetadata> columns;
+    private final Map<String, ColumnDefinition> columnNameToDefinition;
     private final String uri;
     private final boolean isResponseRootArray;
     private final JsonParser parser;
@@ -32,6 +36,8 @@ public class RestRecordCursor implements RecordCursor {
 
     public RestRecordCursor(RestSplit split, RestConfig config, List<ColumnMetadata> columns) throws IOException {
         this.columns = columns;
+        this.columnNameToDefinition = split.endpointDefinition().columns().stream()
+                .collect(Collectors.toMap(ColumnDefinition::name, column -> column));
         this.uri = split.uri();
         this.isResponseRootArray = split.endpointDefinition().isResponseRootArray();
 
@@ -111,26 +117,22 @@ public class RestRecordCursor implements RecordCursor {
 
     @Override
     public boolean getBoolean(int field) {
-        String columnName = columns.get(field).getName();
-        return currentRow.get(columnName).asBoolean();
+        return getFieldNode(field).asBoolean();
     }
 
     @Override
     public long getLong(int field) {
-        String columnName = columns.get(field).getName();
-        return currentRow.get(columnName).asLong();
+        return getFieldNode(field).asLong();
     }
 
     @Override
     public double getDouble(int field) {
-        String columnName = columns.get(field).getName();
-        return currentRow.get(columnName).asDouble();
+        return getFieldNode(field).asDouble();
     }
 
     @Override
     public Slice getSlice(int field) {
-        String columnName = columns.get(field).getName();
-        return Slices.utf8Slice(currentRow.get(columnName).asText());
+        return Slices.utf8Slice(getFieldNode(field).asText());
     }
 
     @Override
@@ -141,10 +143,18 @@ public class RestRecordCursor implements RecordCursor {
 
     @Override
     public boolean isNull(int field) {
-        String columnName = columns.get(field).getName();
-        JsonNode value = currentRow.get(columnName);
+        JsonNode value = getFieldNode(field);
         // Check for missing key or value is json null
         return value == null || value.isNull();
+    }
+
+    private JsonNode getFieldNode(int field) {
+        String columnName = columns.get(field).getName();
+        ColumnDefinition definition = columnNameToDefinition.get(columnName);
+        if (definition == null) {
+            return null;
+        }
+        return JsonUtil.walk(currentRow, columnName, definition.path(), uri);
     }
 
     @Override

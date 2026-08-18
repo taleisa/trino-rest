@@ -12,6 +12,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 
+import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.plugin.rest.openapi.PostBodyDefinition;
 import io.trino.plugin.rest.openapi.PostFilterDefinition;
@@ -51,7 +52,12 @@ public class RestConnectorIndexTest {
     template.put("product_name", null);
     template.put("date", null);
     PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(productName, date), true);
-    return new EndpointDefinition("/enrich", "enrich", List.of(), true, postBody);
+    // A real parsed endpoint's columns() covers every response field, not just the filters -
+    // match that here so lookups for non-filter output columns have somewhere to find their path.
+    List<ColumnDefinition> columns = List.of(
+        new ColumnDefinition("DOUBLE", List.of("discount_pct")),
+        new ColumnDefinition("BOOLEAN", List.of("in_stock")));
+    return new EndpointDefinition("/enrich", "enrich", columns, true, postBody);
   }
 
   @Test
@@ -93,5 +99,74 @@ public class RestConnectorIndexTest {
     assertEquals("2024-01-01", cursor.getSlice(1).toStringUtf8());
     assertEquals(12.5, cursor.getDouble(2));
     assertTrue(cursor.getBoolean(3));
+  }
+
+  @Test
+  void nestedOutputColumnValueIsReadCorrectly() throws Exception {
+    // The column name "location_city" reflects a nested field ({"location": {"city": ...}}), so
+    // its real path (as a real parsed endpoint's columns() would carry it) is ["location",
+    // "city"], not the flat name itself.
+    PostFilterDefinition idFilter = new PostFilterDefinition("id", "VARCHAR", true, false, List.of("id"));
+    Map<String, Object> template = new HashMap<>();
+    template.put("id", null);
+    PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(idFilter), true);
+    List<ColumnDefinition> columns = List.of(new ColumnDefinition("VARCHAR", List.of("location", "city")));
+    EndpointDefinition endpoint = new EndpointDefinition("/geo", "geo", columns, true, postBody);
+
+    wm.stubFor(post("/geo").willReturn(okJson("""
+        [
+          {"id": "1", "location": {"city": "NYC"}}
+        ]
+        """)));
+
+    List<ColumnHandle> lookupSchema = List.of(new RestColumnHandle("request_filter_id", VarcharType.VARCHAR));
+    List<ColumnHandle> outputSchema = List.of(
+        new RestColumnHandle("request_filter_id", VarcharType.VARCHAR),
+        new RestColumnHandle("location_city", VarcharType.VARCHAR));
+
+    RecordSet inputRecordSet = new InMemoryRecordSet(List.of(VarcharType.VARCHAR), List.of(List.of("1")));
+
+    RestConnectorIndex index = new RestConnectorIndex(config(), endpoint, lookupSchema, outputSchema);
+    ConnectorPageSource pageSource = index.lookup(inputRecordSet);
+    RecordCursor cursor = ((RecordPageSource) pageSource).getCursor();
+
+    assertTrue(cursor.advanceNextPosition());
+    assertFalse(cursor.isNull(1), "location_city should be populated from the nested response field");
+    assertEquals("NYC", cursor.getSlice(1).toStringUtf8());
+  }
+
+  @Test
+  void keyColumnMatchesResponseFieldCaseInsensitively() throws Exception {
+    // Some APIs (e.g. MaxMind-style GeoIP APIs) echo the lookup key back under a differently
+    // -cased field name than the request used (request field: "ip", response field: "IP").
+    // Assumed target behavior (not yet confirmed): key matching should be case-insensitive, so
+    // this key column still gets populated instead of coming back null purely because of a
+    // capitalization difference between request and response field names.
+    PostFilterDefinition ipFilter = new PostFilterDefinition("ip", "VARCHAR", true, false, List.of("ip"));
+    Map<String, Object> template = new HashMap<>();
+    template.put("ip", null);
+    PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(ipFilter), true);
+    EndpointDefinition endpoint = new EndpointDefinition("/lookup", "lookup", List.of(), true, postBody);
+
+    wm.stubFor(post("/lookup").willReturn(okJson("""
+        [
+          {"IP": "1.2.3.4", "City": "Springfield"}
+        ]
+        """)));
+
+    List<ColumnHandle> lookupSchema = List.of(new RestColumnHandle("request_filter_ip", VarcharType.VARCHAR));
+    List<ColumnHandle> outputSchema = List.of(
+        new RestColumnHandle("request_filter_ip", VarcharType.VARCHAR),
+        new RestColumnHandle("City", VarcharType.VARCHAR));
+
+    RecordSet inputRecordSet = new InMemoryRecordSet(List.of(VarcharType.VARCHAR), List.of(List.of("1.2.3.4")));
+
+    RestConnectorIndex index = new RestConnectorIndex(config(), endpoint, lookupSchema, outputSchema);
+    ConnectorPageSource pageSource = index.lookup(inputRecordSet);
+    RecordCursor cursor = ((RecordPageSource) pageSource).getCursor();
+
+    assertTrue(cursor.advanceNextPosition());
+    assertFalse(cursor.isNull(0), "request_filter_ip should match the response's \"IP\" field case-insensitively");
+    assertEquals("1.2.3.4", cursor.getSlice(0).toStringUtf8());
   }
 }

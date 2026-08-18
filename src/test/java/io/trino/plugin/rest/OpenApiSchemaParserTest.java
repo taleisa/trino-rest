@@ -74,9 +74,10 @@ public class OpenApiSchemaParserTest {
   @SuppressWarnings("unchecked")
   private List<ColumnDefinition> extractColumns(Schema<?> schema) throws Exception {
     Method method = OpenApiSchemaParser.class.getDeclaredMethod(
-        "extractColumns", Schema.class, String.class, List.class, String.class);
+        "extractColumns", Schema.class, List.class, List.class);
     method.setAccessible(true);
-    return (List<ColumnDefinition>) method.invoke(null, schema, "", new ArrayList<ColumnDefinition>(), "/test");
+    return (List<ColumnDefinition>) method.invoke(null, schema, new ArrayList<ColumnDefinition>(),
+        new ArrayList<String>());
   }
 
   @Test
