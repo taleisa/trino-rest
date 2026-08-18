@@ -81,8 +81,13 @@ public class RestMetadata implements ConnectorMetadata {
             columnNameToHandle.put(col.name(),
                     new RestColumnHandle(col.name(), TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType())));
         }
+        // 'Virtual' columns used to indicate that these are columns that will be
+        // handled solely by the api not trino
         if (definition.isPostQuery()) {
             for (PostFilterDefinition filter : definition.postBody().filters()) {
+                if (filter.responseColumn() != null) {
+                    continue;
+                }
                 columnNameToHandle.put(filter.columnName(),
                         new RestColumnHandle(filter.columnName(), TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType())));
             }
@@ -127,8 +132,13 @@ public class RestMetadata implements ConnectorMetadata {
                         .setType(TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType()))
                         .build());
             }
+            // 'Virtual' columns used to indicate that these are columns that will be
+            // handled solely by the api not trino
             if (definition.isPostQuery()) {
                 for (PostFilterDefinition filter : definition.postBody().filters()) {
+                    if (filter.responseColumn() != null) {
+                        continue;
+                    }
                     String comment = String.format("%s POST filter (%s)",
                             filter.required() ? "required" : "optional",
                             filter.isArray() ? "accepts multiple values via IN" : "single value only, no IN");

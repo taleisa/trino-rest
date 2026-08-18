@@ -81,22 +81,15 @@ public class RestConnectorIndex implements ConnectorIndex {
             List<Object> record = new ArrayList<>();
             for (ColumnHandle columnHandle : outputSchema) {
                 RestColumnHandle restColumnHandle = (RestColumnHandle) columnHandle;
-                PostFilterDefinition filter = columnNameToFilter.get(restColumnHandle.columnName());
-                JsonNode rawValue;
-                if (filter == null) {
-                    // Value columns are looked up by walking their real nested path in the
-                    // response - the flat, underscore-joined column name (e.g. "address_city")
-                    // is never itself a key in the response.
-                    ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
-                    rawValue = column != null
-                            ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
-                            : null;
-                } else {
-                    // Key columns are looked up under their raw filter name - the target API only
-                    // ever echoes back "product_name", never our Trino-side
-                    // "request_filter_product_name".
-                    rawValue = responseRow.get(filter.name());
-                }
+                // Every readable column - whether a plain response field or a filter that's also
+                // echoed back (its Trino column name is then the response column's own name, see
+                // PostFilterDefinition.responseColumn/columnName) - is looked up the same way: walk
+                // its real nested path in the response. A filter with no matching response column
+                // (columnName() still request_filter_*) has nothing here to find and stays null.
+                ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
+                JsonNode rawValue = column != null
+                        ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
+                        : null;
                 record.add(normalizeForType(restColumnHandle.columnType(), rawValue));
             }
             records.add(record);

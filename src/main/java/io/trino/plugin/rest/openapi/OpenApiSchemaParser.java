@@ -72,8 +72,7 @@ public class OpenApiSchemaParser {
     private static EndpointDefinition buildGetEndpoint(String path, String tableName, Operation get) {
         try {
             Schema responseSchema = getJsonResponseSchema(get);
-            List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, columns, new ArrayList<>());
+            List<ColumnDefinition> columns = extractColumns(responseSchema, new ArrayList<>(), new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -89,8 +88,7 @@ public class OpenApiSchemaParser {
     private static EndpointDefinition buildPostQueryEndpoint(String path, String tableName, Operation post) {
         try {
             Schema responseSchema = getJsonResponseSchema(post);
-            List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, columns, new ArrayList<>());
+            List<ColumnDefinition> columns = extractColumns(responseSchema, new ArrayList<>(), new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -104,10 +102,12 @@ public class OpenApiSchemaParser {
             String requestRootType = getType(requestSchema);
             if ("object".equals(requestRootType) || "array".equals(requestRootType)) {
 
+                List<ColumnDefinition> responseColumnsForFilters = "array".equals(requestRootType) ? columns
+                        : List.of();
                 List<PostFilterDefinition> filters = new ArrayList<>();
                 Map<String, Object> requestBodyTemplate = buildRequestTemplate(
                         "array".equals(requestRootType) ? requestSchema.getItems() : requestSchema, "", filters, path,
-                        List.of());
+                        List.of(), responseColumnsForFilters);
                 if (requestBodyTemplate == null) {
                     // buildRequestTemplate already logged the specific reason.
                     return null;
@@ -159,7 +159,8 @@ public class OpenApiSchemaParser {
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private static Map<String, Object> buildRequestTemplate(Schema objectSchema, String prefix,
-            List<PostFilterDefinition> filters, String path, List<String> pathSegments) {
+            List<PostFilterDefinition> filters, String path, List<String> pathSegments,
+            List<ColumnDefinition> responseColumns) {
         Map<String, Schema> properties = (Map<String, Schema>) objectSchema.getProperties();
         if (properties == null) {
             return Map.of();
@@ -177,7 +178,7 @@ public class OpenApiSchemaParser {
 
             if ("object".equals(type)) {
                 Map<String, Object> nested = buildRequestTemplate(propertySchema, name + "_", filters, path,
-                        fieldPath);
+                        fieldPath, responseColumns);
                 // null means this nested object has a required property somewhere inside it
                 // that can't be represented (array-of-objects, unresolvable type, etc.).
                 if (nested == null) {
@@ -191,8 +192,8 @@ public class OpenApiSchemaParser {
             } else if ("array".equals(type)) {
                 String itemsType = getType(propertySchema.getItems());
                 if (isScalarType(itemsType)) {
-                    filters.add(new PostFilterDefinition(name, TYPE_TO_TRINO_TYPE.get(itemsType), isRequired, true,
-                            fieldPath));
+                    filters.add(new PostFilterDefinition(TYPE_TO_TRINO_TYPE.get(itemsType), isRequired, true,
+                            fieldPath, findResponseColumn(responseColumns, name)));
                     result.put(propertyKey, null);
                 } else if (isRequired) {
                     log.warn(
@@ -202,8 +203,8 @@ public class OpenApiSchemaParser {
                 }
                 // optional array-of-objects/arrays: not walkable, omit the key entirely.
             } else if (isScalarType(type)) {
-                filters.add(new PostFilterDefinition(name, TYPE_TO_TRINO_TYPE.get(type), isRequired, false,
-                        fieldPath));
+                filters.add(new PostFilterDefinition(TYPE_TO_TRINO_TYPE.get(type), isRequired, false,
+                        fieldPath, findResponseColumn(responseColumns, name)));
                 result.put(propertyKey, null);
             } else if (isRequired) {
                 log.warn("Skipping %s: required property %s has no resolvable type", path, name);
@@ -216,6 +217,20 @@ public class OpenApiSchemaParser {
 
     private static boolean isScalarType(String type) {
         return "string".equals(type) || "integer".equals(type) || "number".equals(type) || "boolean".equals(type);
+    }
+
+    // The request and response schemas are parsed independently and commonly
+    // disagree on casing
+    // for the same field (e.g. request "ip", response "IP") - match by name
+    // case-insensitively,
+    // since that's the only signal connecting them.
+    private static ColumnDefinition findResponseColumn(List<ColumnDefinition> responseColumns, String name) {
+        for (ColumnDefinition column : responseColumns) {
+            if (column.name().equalsIgnoreCase(name)) {
+                return column;
+            }
+        }
+        return null;
     }
 
     /**

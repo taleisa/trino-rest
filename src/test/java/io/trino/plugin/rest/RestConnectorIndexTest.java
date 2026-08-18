@@ -45,16 +45,21 @@ public class RestConnectorIndexTest {
   }
 
   private EndpointDefinition enrichEndpoint() {
-    PostFilterDefinition productName = new PostFilterDefinition("product_name", "VARCHAR", true, false,
-        List.of("product_name"));
-    PostFilterDefinition date = new PostFilterDefinition("date", "VARCHAR", true, false, List.of("date"));
+    // A real parsed endpoint cross-references filters against the response's own columns() - both
+    // "product_name" and "date" are echoed back under the same name here, so each filter carries
+    // that column as its responseColumn, and its Trino-visible name becomes that column's own
+    // name ("product_name"/"date") rather than "request_filter_product_name"/"request_filter_date".
+    ColumnDefinition productNameColumn = new ColumnDefinition("VARCHAR", List.of("product_name"));
+    ColumnDefinition dateColumn = new ColumnDefinition("VARCHAR", List.of("date"));
+    PostFilterDefinition productName = new PostFilterDefinition("VARCHAR", true, false,
+        List.of("product_name"), productNameColumn);
+    PostFilterDefinition date = new PostFilterDefinition("VARCHAR", true, false, List.of("date"), dateColumn);
     Map<String, Object> template = new HashMap<>();
     template.put("product_name", null);
     template.put("date", null);
     PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(productName, date), true);
-    // A real parsed endpoint's columns() covers every response field, not just the filters -
-    // match that here so lookups for non-filter output columns have somewhere to find their path.
     List<ColumnDefinition> columns = List.of(
+        productNameColumn, dateColumn,
         new ColumnDefinition("DOUBLE", List.of("discount_pct")),
         new ColumnDefinition("BOOLEAN", List.of("in_stock")));
     return new EndpointDefinition("/enrich", "enrich", columns, true, postBody);
@@ -62,8 +67,8 @@ public class RestConnectorIndexTest {
 
   @Test
   void lookupReturnsKeyColumnValuesNotNull() throws Exception {
-    // The target API only ever echoes back the bare field names (product_name/date), never our
-    // Trino-side request_filter_* column names.
+    // The target API only ever echoes back the bare field names (product_name/date) - which is
+    // exactly what these columns are now named, since they have a matching responseColumn.
     wm.stubFor(post("/enrich").willReturn(okJson("""
         [
           {"product_name": "Widget", "date": "2024-01-01", "discount_pct": 12.5, "in_stock": true}
@@ -71,13 +76,13 @@ public class RestConnectorIndexTest {
         """)));
 
     List<ColumnHandle> lookupSchema = List.of(
-        new RestColumnHandle("request_filter_product_name", VarcharType.VARCHAR),
-        new RestColumnHandle("request_filter_date", VarcharType.VARCHAR));
+        new RestColumnHandle("product_name", VarcharType.VARCHAR),
+        new RestColumnHandle("date", VarcharType.VARCHAR));
     // outputSchema always includes the key columns alongside the requested value columns - this
     // is what Trino's IndexSnapshotBuilder hashes on to correlate results back to probe rows.
     List<ColumnHandle> outputSchema = List.of(
-        new RestColumnHandle("request_filter_product_name", VarcharType.VARCHAR),
-        new RestColumnHandle("request_filter_date", VarcharType.VARCHAR),
+        new RestColumnHandle("product_name", VarcharType.VARCHAR),
+        new RestColumnHandle("date", VarcharType.VARCHAR),
         new RestColumnHandle("discount_pct", DoubleType.DOUBLE),
         new RestColumnHandle("in_stock", BooleanType.BOOLEAN));
 
@@ -90,12 +95,9 @@ public class RestConnectorIndexTest {
     RecordCursor cursor = ((RecordPageSource) pageSource).getCursor();
 
     assertTrue(cursor.advanceNextPosition());
-    // This is the bug: the key columns are looked up in the response using the Trino column name
-    // ("request_filter_product_name") instead of the filter's raw name ("product_name"), so they
-    // come back null even though the API response clearly has a value for them.
-    assertFalse(cursor.isNull(0), "request_filter_product_name should be populated from the response");
+    assertFalse(cursor.isNull(0), "product_name should be populated from the response");
     assertEquals("Widget", cursor.getSlice(0).toStringUtf8());
-    assertFalse(cursor.isNull(1), "request_filter_date should be populated from the response");
+    assertFalse(cursor.isNull(1), "date should be populated from the response");
     assertEquals("2024-01-01", cursor.getSlice(1).toStringUtf8());
     assertEquals(12.5, cursor.getDouble(2));
     assertTrue(cursor.getBoolean(3));
@@ -106,7 +108,7 @@ public class RestConnectorIndexTest {
     // The column name "location_city" reflects a nested field ({"location": {"city": ...}}), so
     // its real path (as a real parsed endpoint's columns() would carry it) is ["location",
     // "city"], not the flat name itself.
-    PostFilterDefinition idFilter = new PostFilterDefinition("id", "VARCHAR", true, false, List.of("id"));
+    PostFilterDefinition idFilter = new PostFilterDefinition("VARCHAR", true, false, List.of("id"), null);
     Map<String, Object> template = new HashMap<>();
     template.put("id", null);
     PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(idFilter), true);
@@ -139,14 +141,18 @@ public class RestConnectorIndexTest {
   void keyColumnMatchesResponseFieldCaseInsensitively() throws Exception {
     // Some APIs (e.g. MaxMind-style GeoIP APIs) echo the lookup key back under a differently
     // -cased field name than the request used (request field: "ip", response field: "IP").
-    // Assumed target behavior (not yet confirmed): key matching should be case-insensitive, so
-    // this key column still gets populated instead of coming back null purely because of a
-    // capitalization difference between request and response field names.
-    PostFilterDefinition ipFilter = new PostFilterDefinition("ip", "VARCHAR", true, false, List.of("ip"));
+    // OpenApiSchemaParser resolves this once, at parse time, by matching the filter's name
+    // against the response's own columns() case-insensitively - so the filter's Trino column name
+    // becomes the response's own name ("IP"), and gets read via the normal, exact-match
+    // nested-path lookup rather than a flat lookup under the request-side name.
+    ColumnDefinition ipColumn = new ColumnDefinition("VARCHAR", List.of("IP"));
+    ColumnDefinition cityColumn = new ColumnDefinition("VARCHAR", List.of("City"));
+    PostFilterDefinition ipFilter = new PostFilterDefinition("VARCHAR", true, false, List.of("ip"), ipColumn);
     Map<String, Object> template = new HashMap<>();
     template.put("ip", null);
     PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(ipFilter), true);
-    EndpointDefinition endpoint = new EndpointDefinition("/lookup", "lookup", List.of(), true, postBody);
+    EndpointDefinition endpoint = new EndpointDefinition("/lookup", "lookup", List.of(ipColumn, cityColumn), true,
+        postBody);
 
     wm.stubFor(post("/lookup").willReturn(okJson("""
         [
@@ -154,9 +160,9 @@ public class RestConnectorIndexTest {
         ]
         """)));
 
-    List<ColumnHandle> lookupSchema = List.of(new RestColumnHandle("request_filter_ip", VarcharType.VARCHAR));
+    List<ColumnHandle> lookupSchema = List.of(new RestColumnHandle("IP", VarcharType.VARCHAR));
     List<ColumnHandle> outputSchema = List.of(
-        new RestColumnHandle("request_filter_ip", VarcharType.VARCHAR),
+        new RestColumnHandle("IP", VarcharType.VARCHAR),
         new RestColumnHandle("City", VarcharType.VARCHAR));
 
     RecordSet inputRecordSet = new InMemoryRecordSet(List.of(VarcharType.VARCHAR), List.of(List.of("1.2.3.4")));
@@ -166,7 +172,8 @@ public class RestConnectorIndexTest {
     RecordCursor cursor = ((RecordPageSource) pageSource).getCursor();
 
     assertTrue(cursor.advanceNextPosition());
-    assertFalse(cursor.isNull(0), "request_filter_ip should match the response's \"IP\" field case-insensitively");
+    assertFalse(cursor.isNull(0), "IP should be populated even though the request used a different casing (\"ip\")");
     assertEquals("1.2.3.4", cursor.getSlice(0).toStringUtf8());
+    assertEquals("Springfield", cursor.getSlice(1).toStringUtf8());
   }
 }
