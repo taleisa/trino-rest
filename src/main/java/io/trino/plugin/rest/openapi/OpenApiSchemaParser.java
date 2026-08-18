@@ -299,6 +299,7 @@ public class OpenApiSchemaParser {
      * For OpenAPI < 3.1 there is only 1 type.
      *
      */
+    @SuppressWarnings("unchecked")
     private static String getType(Schema schema) {
         if (schema.getType() != null) {
             return schema.getType();
@@ -306,6 +307,18 @@ public class OpenApiSchemaParser {
             for (Object schemaType : schema.getTypes()) {
                 if (!"null".equals(schemaType)) {
                     return (String) schemaType;
+                }
+            }
+        } else if (schema.getAnyOf() != null) {
+            // OpenAPI 3.1's idiomatic "nullable X" is anyOf: [{type: X}, {type: null}] (the
+            // "nullable" keyword was removed in 3.1) - neither getType() nor getTypes() surface
+            // this, only getAnyOf() does. Recurse so a sub-schema using either style still
+            // resolves, and skip the literal string "null" the same way the getTypes() branch
+            // above does.
+            for (Schema subSchema : (List<Schema>) schema.getAnyOf()) {
+                String subType = getType(subSchema);
+                if (subType != null && !"null".equals(subType)) {
+                    return subType;
                 }
             }
         }
