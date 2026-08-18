@@ -138,6 +138,40 @@ public class RestConnectorIndexTest {
   }
 
   @Test
+  void jsonObjectColumnValueIsReadAsRealJsonNotEmptyString() throws Exception {
+    // Same underlying bug as RestRecordCursor: a free-form/dictionary field maps to an opaque
+    // JSON (VARCHAR-typed) column, but normalizeForType() called JsonNode.asText() unconditionally
+    // - meaningful only for scalar nodes, silently "" for a container (object/array) node.
+    PostFilterDefinition idFilter = new PostFilterDefinition("VARCHAR", true, false, List.of("id"), null);
+    Map<String, Object> template = new HashMap<>();
+    template.put("id", null);
+    PostBodyDefinition postBody = new PostBodyDefinition(template, List.of(idFilter), true);
+    List<ColumnDefinition> columns = List.of(new ColumnDefinition("JSON", List.of("names")));
+    EndpointDefinition endpoint = new EndpointDefinition("/dictlookup", "dictlookup", columns, true, postBody);
+
+    wm.stubFor(post("/dictlookup").willReturn(okJson("""
+        [
+          {"id": "1", "names": {"en": "New York", "de": "New York"}}
+        ]
+        """)));
+
+    List<ColumnHandle> lookupSchema = List.of(new RestColumnHandle("request_filter_id", VarcharType.VARCHAR));
+    List<ColumnHandle> outputSchema = List.of(
+        new RestColumnHandle("request_filter_id", VarcharType.VARCHAR),
+        new RestColumnHandle("names", VarcharType.VARCHAR));
+
+    RecordSet inputRecordSet = new InMemoryRecordSet(List.of(VarcharType.VARCHAR), List.of(List.of("1")));
+
+    RestConnectorIndex index = new RestConnectorIndex(config(), endpoint, lookupSchema, outputSchema);
+    ConnectorPageSource pageSource = index.lookup(inputRecordSet);
+    RecordCursor cursor = ((RecordPageSource) pageSource).getCursor();
+
+    assertTrue(cursor.advanceNextPosition());
+    assertFalse(cursor.isNull(1), "names should be populated from the response");
+    assertEquals("{\"en\":\"New York\",\"de\":\"New York\"}", cursor.getSlice(1).toStringUtf8());
+  }
+
+  @Test
   void keyColumnMatchesResponseFieldCaseInsensitively() throws Exception {
     // Some APIs (e.g. MaxMind-style GeoIP APIs) echo the lookup key back under a differently
     // -cased field name than the request used (request field: "ip", response field: "IP").

@@ -81,11 +81,6 @@ public class RestConnectorIndex implements ConnectorIndex {
             List<Object> record = new ArrayList<>();
             for (ColumnHandle columnHandle : outputSchema) {
                 RestColumnHandle restColumnHandle = (RestColumnHandle) columnHandle;
-                // Every readable column - whether a plain response field or a filter that's also
-                // echoed back (its Trino column name is then the response column's own name, see
-                // PostFilterDefinition.responseColumn/columnName) - is looked up the same way: walk
-                // its real nested path in the response. A filter with no matching response column
-                // (columnName() still request_filter_*) has nothing here to find and stays null.
                 ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
                 JsonNode rawValue = column != null
                         ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
@@ -120,6 +115,8 @@ public class RestConnectorIndex implements ConnectorIndex {
         if (type instanceof BooleanType) {
             return rawValue.asBoolean();
         }
-        return rawValue.asText(); // VARCHAR
+        // asText() is only meaningful for a scalar value node - for a container (object/array)
+        // node, e.g. an opaque JSON column, it silently returns "" instead of the JSON content.
+        return rawValue.isContainerNode() ? rawValue.toString() : rawValue.asText(); // VARCHAR
     }
 }

@@ -37,21 +37,26 @@ import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.type.BigintType;
 import io.trino.spi.type.BooleanType;
 import io.trino.spi.type.DoubleType;
+import io.trino.spi.type.StandardTypes;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.VarcharType;
 
 public class RestMetadata implements ConnectorMetadata {
-    private static final Map<String, Type> TYPE_NAME_TO_TRINO_TYPE = Map.of(
-            "VARCHAR", VarcharType.VARCHAR,
-            "BIGINT", BigintType.BIGINT,
-            "DOUBLE", DoubleType.DOUBLE,
-            "BOOLEAN", BooleanType.BOOLEAN,
-            "JSON", VarcharType.VARCHAR // JSON stored as VARCHAR for now
-    );
+    // JsonType isn't part of trino-spi (it lives in trino-main, the engine module) - the
+    // TypeManager every connector receives via ConnectorContext is how a plugin resolves an
+    // engine-registered type like "json" by name instead.
+    private final Map<String, Type> typeNameToTrinoType;
     private final Map<String, EndpointDefinition> tableNameToEndPointDefinition;
     private static final Logger log = Logger.get(RestMetadata.class);
 
-    public RestMetadata(RestConfig config) {
+    public RestMetadata(RestConfig config, TypeManager typeManager) {
+        this.typeNameToTrinoType = Map.of(
+                "VARCHAR", VarcharType.VARCHAR,
+                "BIGINT", BigintType.BIGINT,
+                "DOUBLE", DoubleType.DOUBLE,
+                "BOOLEAN", BooleanType.BOOLEAN,
+                "JSON", typeManager.fromSqlType(StandardTypes.JSON));
         this.tableNameToEndPointDefinition = new HashMap<>();
         try {
             List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
@@ -79,7 +84,7 @@ public class RestMetadata implements ConnectorMetadata {
         Map<String, ColumnHandle> columnNameToHandle = new HashMap<>();
         for (ColumnDefinition col : definition.columns()) {
             columnNameToHandle.put(col.name(),
-                    new RestColumnHandle(col.name(), TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType())));
+                    new RestColumnHandle(col.name(), typeNameToTrinoType.get(col.trinoType())));
         }
         // 'Virtual' columns used to indicate that these are columns that will be
         // handled solely by the api not trino
@@ -89,7 +94,7 @@ public class RestMetadata implements ConnectorMetadata {
                     continue;
                 }
                 columnNameToHandle.put(filter.columnName(),
-                        new RestColumnHandle(filter.columnName(), TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType())));
+                        new RestColumnHandle(filter.columnName(), typeNameToTrinoType.get(filter.trinoType())));
             }
         }
         return columnNameToHandle;
@@ -139,7 +144,7 @@ public class RestMetadata implements ConnectorMetadata {
             for (ColumnDefinition col : definition.columns()) {
                 ColumnMetadata.Builder columnBuilder = ColumnMetadata.builder()
                         .setName(col.name())
-                        .setType(TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType()));
+                        .setType(typeNameToTrinoType.get(col.trinoType()));
                 PostFilterDefinition matchedFilter = responseColumnToFilter.get(col);
                 if (matchedFilter != null) {
                     columnBuilder.setComment(Optional.of(String.format(
@@ -162,7 +167,7 @@ public class RestMetadata implements ConnectorMetadata {
                             isJoinOnly ? " - usable only via JOIN, not WHERE" : "");
                     columnMetadata.add(ColumnMetadata.builder()
                             .setName(filter.columnName())
-                            .setType(TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType()))
+                            .setType(typeNameToTrinoType.get(filter.trinoType()))
                             .setComment(Optional.of(comment))
                             .build());
                 }

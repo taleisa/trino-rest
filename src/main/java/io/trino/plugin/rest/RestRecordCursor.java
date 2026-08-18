@@ -132,7 +132,10 @@ public class RestRecordCursor implements RecordCursor {
 
     @Override
     public Slice getSlice(int field) {
-        return Slices.utf8Slice(getFieldNode(field).asText());
+        JsonNode value = getFieldNode(field);
+        // asText() is only meaningful for a scalar value node - for a container (object/array)
+        // node, e.g. an opaque JSON column, it silently returns "" instead of the JSON content.
+        return Slices.utf8Slice(value.isContainerNode() ? value.toString() : value.asText());
     }
 
     @Override

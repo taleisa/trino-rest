@@ -130,6 +130,35 @@ public class RestRecordCursorTest {
   }
 
   @Test
+  void jsonObjectColumnValueIsReadAsRealJsonNotEmptyString() throws Exception {
+    // A free-form/dictionary field (e.g. a language-code -> name map with no fixed key set) is
+    // mapped to an opaque JSON column (VARCHAR-typed), per extractColumns' free-form-object
+    // handling. Reading it must serialize the actual object, not call JsonNode.asText() - asText()
+    // is only meaningful for scalar value nodes; called on a container node (object/array), it
+    // silently returns "" instead of the JSON content.
+    List<ColumnMetadata> columns = List.of(
+        new ColumnMetadata("id", BigintType.BIGINT),
+        new ColumnMetadata("names", VarcharType.VARCHAR));
+    List<ColumnDefinition> definitionColumns = List.of(
+        new ColumnDefinition("BIGINT", List.of("id")),
+        new ColumnDefinition("JSON", List.of("names")));
+    wm.stubFor(get("/dict").willReturn(okJson("""
+        [
+          {"id": 1, "names": {"en": "New York", "de": "New York"}}
+        ]
+        """)));
+
+    RecordCursor cursor = cursorFor("/dict", true, columns, definitionColumns);
+    try {
+      assertTrue(cursor.advanceNextPosition());
+      assertFalse(cursor.isNull(1), "names should be populated from the response");
+      assertEquals("{\"en\":\"New York\",\"de\":\"New York\"}", cursor.getSlice(1).toStringUtf8());
+    } finally {
+      cursor.close();
+    }
+  }
+
+  @Test
   void singleObjectResponseReadAsOneRow() throws Exception {
     wm.stubFor(get("/item").willReturn(okJson("""
         {"id": 42, "name": "Solo", "active": true, "score": 1.5}

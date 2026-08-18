@@ -9,6 +9,7 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.transaction.IsolationLevel;
+import io.trino.spi.type.TypeManager;
 
 public class RestConnector implements Connector {
     private final RestMetadata metadata;
@@ -16,9 +17,9 @@ public class RestConnector implements Connector {
     private final RestRecordSetProvider recordSetProvider;
     private final RestConfig config;
 
-    public RestConnector(RestConfig config) throws Exception {
+    public RestConnector(RestConfig config, TypeManager typeManager) throws Exception {
         this.config = config;
-        this.metadata = new RestMetadata(config);
+        this.metadata = new RestMetadata(config, typeManager);
         this.splitManager = new RestSplitManager(config, metadata.getTableNameToEndPointDefinition());
         this.recordSetProvider = new RestRecordSetProvider(config);
     }
