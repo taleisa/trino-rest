@@ -72,8 +72,7 @@ public class OpenApiSchemaParser {
     private static EndpointDefinition buildGetEndpoint(String path, String tableName, Operation get) {
         try {
             Schema responseSchema = getJsonResponseSchema(get);
-            List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, "", columns, path);
+            List<ColumnDefinition> columns = extractColumns(responseSchema, new ArrayList<>(), new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -89,8 +88,7 @@ public class OpenApiSchemaParser {
     private static EndpointDefinition buildPostQueryEndpoint(String path, String tableName, Operation post) {
         try {
             Schema responseSchema = getJsonResponseSchema(post);
-            List<ColumnDefinition> columns = new ArrayList<>();
-            extractColumns(responseSchema, "", columns, path);
+            List<ColumnDefinition> columns = extractColumns(responseSchema, new ArrayList<>(), new ArrayList<>());
             if (columns.isEmpty()) {
                 log.warn("Skipping %s: no columns could be extracted from schema", path);
                 return null;
@@ -104,10 +102,12 @@ public class OpenApiSchemaParser {
             String requestRootType = getType(requestSchema);
             if ("object".equals(requestRootType) || "array".equals(requestRootType)) {
 
+                List<ColumnDefinition> responseColumnsForFilters = "array".equals(requestRootType) ? columns
+                        : List.of();
                 List<PostFilterDefinition> filters = new ArrayList<>();
                 Map<String, Object> requestBodyTemplate = buildRequestTemplate(
                         "array".equals(requestRootType) ? requestSchema.getItems() : requestSchema, "", filters, path,
-                        List.of());
+                        List.of(), responseColumnsForFilters);
                 if (requestBodyTemplate == null) {
                     // buildRequestTemplate already logged the specific reason.
                     return null;
@@ -159,7 +159,8 @@ public class OpenApiSchemaParser {
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private static Map<String, Object> buildRequestTemplate(Schema objectSchema, String prefix,
-            List<PostFilterDefinition> filters, String path, List<String> pathSegments) {
+            List<PostFilterDefinition> filters, String path, List<String> pathSegments,
+            List<ColumnDefinition> responseColumns) {
         Map<String, Schema> properties = (Map<String, Schema>) objectSchema.getProperties();
         if (properties == null) {
             return Map.of();
@@ -177,7 +178,7 @@ public class OpenApiSchemaParser {
 
             if ("object".equals(type)) {
                 Map<String, Object> nested = buildRequestTemplate(propertySchema, name + "_", filters, path,
-                        fieldPath);
+                        fieldPath, responseColumns);
                 // null means this nested object has a required property somewhere inside it
                 // that can't be represented (array-of-objects, unresolvable type, etc.).
                 if (nested == null) {
@@ -191,8 +192,8 @@ public class OpenApiSchemaParser {
             } else if ("array".equals(type)) {
                 String itemsType = getType(propertySchema.getItems());
                 if (isScalarType(itemsType)) {
-                    filters.add(new PostFilterDefinition(name, TYPE_TO_TRINO_TYPE.get(itemsType), isRequired, true,
-                            fieldPath));
+                    filters.add(new PostFilterDefinition(TYPE_TO_TRINO_TYPE.get(itemsType), isRequired, true,
+                            fieldPath, findResponseColumn(responseColumns, name)));
                     result.put(propertyKey, null);
                 } else if (isRequired) {
                     log.warn(
@@ -202,8 +203,8 @@ public class OpenApiSchemaParser {
                 }
                 // optional array-of-objects/arrays: not walkable, omit the key entirely.
             } else if (isScalarType(type)) {
-                filters.add(new PostFilterDefinition(name, TYPE_TO_TRINO_TYPE.get(type), isRequired, false,
-                        fieldPath));
+                filters.add(new PostFilterDefinition(TYPE_TO_TRINO_TYPE.get(type), isRequired, false,
+                        fieldPath, findResponseColumn(responseColumns, name)));
                 result.put(propertyKey, null);
             } else if (isRequired) {
                 log.warn("Skipping %s: required property %s has no resolvable type", path, name);
@@ -218,20 +219,34 @@ public class OpenApiSchemaParser {
         return "string".equals(type) || "integer".equals(type) || "number".equals(type) || "boolean".equals(type);
     }
 
+    // The request and response schemas are parsed independently and commonly
+    // disagree on casing
+    // for the same field (e.g. request "ip", response "IP") - match by name
+    // case-insensitively,
+    // since that's the only signal connecting them.
+    private static ColumnDefinition findResponseColumn(List<ColumnDefinition> responseColumns, String name) {
+        for (ColumnDefinition column : responseColumns) {
+            if (column.name().equalsIgnoreCase(name)) {
+                return column;
+            }
+        }
+        return null;
+    }
+
     /**
      * Extract columns from OPENAPI schema, any non top level array is treated as a
      * json object.
      */
-    private static List<ColumnDefinition> extractColumns(Schema schema, String prefix, List<ColumnDefinition> columns,
-            String path) {
-        Boolean isTopLevel = prefix.isEmpty();
+    private static List<ColumnDefinition> extractColumns(Schema schema, List<ColumnDefinition> columns,
+            List<String> path) {
+        Boolean isTopLevel = path.isEmpty();
         String schemaType = getType(schema);
         // If type is object or non top level array
         if ("object".equals(schemaType) || ("array".equals(schemaType) && isTopLevel)) {
             Schema target = "array".equals(schemaType) ? schema.getItems() : schema;
             @SuppressWarnings({ "rawtypes", "unchecked" })
-            Map<String, Schema> map = (Map<String, Schema>) target.getProperties();
-            if (map == null) {
+            Map<String, Schema> properties = (Map<String, Schema>) target.getProperties();
+            if (properties == null) {
                 if (isTopLevel) {
                     log.warn("Skipping %s: top-level object schema has no properties to turn into columns", path);
                     return columns;
@@ -239,15 +254,16 @@ public class OpenApiSchemaParser {
                 // Free-form/dictionary object (additionalProperties, no fixed keys) - same
                 // treatment as a nested array: represent it as an opaque JSON column instead of
                 // crashing or losing it.
-                columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1), "JSON"));
+                columns.add(new ColumnDefinition("JSON", path));
                 return columns;
             }
             // Arrays not on top level is mapped to JSON object
-            for (Map.Entry<String, Schema> entry : map.entrySet()) {
-                Schema innerSchema = entry.getValue();
-                String name = prefix + entry.getKey();
-                columns = extractColumns(innerSchema, name + "_", columns, path);
-
+            for (Map.Entry<String, Schema> property : properties.entrySet()) {
+                Schema innerSchema = property.getValue();
+                // New list to avoid adding to the shared list (lists are passed by reference)
+                List<String> fieldPath = new ArrayList<>(path);
+                fieldPath.add(property.getKey());
+                columns = extractColumns(innerSchema, columns, fieldPath);
             }
         } else if (isTopLevel) {
             // A top-level schema with no resolvable type (e.g. a oneOf/anyOf polymorphic
@@ -255,8 +271,7 @@ public class OpenApiSchemaParser {
             log.warn("Skipping %s: top-level schema has no resolvable type (e.g. oneOf/anyOf)", path);
         } else {
             // `prefix` is passed with `_` remove it as this will be a column name.
-            columns.add(new ColumnDefinition(prefix.substring(0, prefix.length() - 1),
-                    TYPE_TO_TRINO_TYPE.get(schemaType)));
+            columns.add(new ColumnDefinition(TYPE_TO_TRINO_TYPE.get(schemaType), path));
         }
         return columns;
     }
@@ -284,6 +299,7 @@ public class OpenApiSchemaParser {
      * For OpenAPI < 3.1 there is only 1 type.
      *
      */
+    @SuppressWarnings("unchecked")
     private static String getType(Schema schema) {
         if (schema.getType() != null) {
             return schema.getType();
@@ -291,6 +307,18 @@ public class OpenApiSchemaParser {
             for (Object schemaType : schema.getTypes()) {
                 if (!"null".equals(schemaType)) {
                     return (String) schemaType;
+                }
+            }
+        } else if (schema.getAnyOf() != null) {
+            // OpenAPI 3.1's idiomatic "nullable X" is anyOf: [{type: X}, {type: null}] (the
+            // "nullable" keyword was removed in 3.1) - neither getType() nor getTypes() surface
+            // this, only getAnyOf() does. Recurse so a sub-schema using either style still
+            // resolves, and skip the literal string "null" the same way the getTypes() branch
+            // above does.
+            for (Schema subSchema : (List<Schema>) schema.getAnyOf()) {
+                String subType = getType(subSchema);
+                if (subType != null && !"null".equals(subType)) {
+                    return subType;
                 }
             }
         }

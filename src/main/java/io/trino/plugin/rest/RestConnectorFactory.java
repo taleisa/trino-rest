@@ -18,7 +18,7 @@ public class RestConnectorFactory implements ConnectorFactory{
     public Connector create(String catalogName, Map<String, String> config, ConnectorContext context) {
         RestConfig restConfig = new RestConfig(config);
         try {
-            return new RestConnector(restConfig);
+            return new RestConnector(restConfig, context.getTypeManager());
         } catch (Exception e) {
             throw new RuntimeException("Failed to initialize REST connector for catalog " + catalogName, e);
         }

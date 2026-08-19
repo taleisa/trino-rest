@@ -37,21 +37,26 @@ import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.type.BigintType;
 import io.trino.spi.type.BooleanType;
 import io.trino.spi.type.DoubleType;
+import io.trino.spi.type.StandardTypes;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.VarcharType;
 
 public class RestMetadata implements ConnectorMetadata {
-    private static final Map<String, Type> TYPE_NAME_TO_TRINO_TYPE = Map.of(
-            "VARCHAR", VarcharType.VARCHAR,
-            "BIGINT", BigintType.BIGINT,
-            "DOUBLE", DoubleType.DOUBLE,
-            "BOOLEAN", BooleanType.BOOLEAN,
-            "JSON", VarcharType.VARCHAR // JSON stored as VARCHAR for now
-    );
+    // JsonType isn't part of trino-spi (it lives in trino-main, the engine module) - the
+    // TypeManager every connector receives via ConnectorContext is how a plugin resolves an
+    // engine-registered type like "json" by name instead.
+    private final Map<String, Type> typeNameToTrinoType;
     private final Map<String, EndpointDefinition> tableNameToEndPointDefinition;
     private static final Logger log = Logger.get(RestMetadata.class);
 
-    public RestMetadata(RestConfig config) {
+    public RestMetadata(RestConfig config, TypeManager typeManager) {
+        this.typeNameToTrinoType = Map.of(
+                "VARCHAR", VarcharType.VARCHAR,
+                "BIGINT", BigintType.BIGINT,
+                "DOUBLE", DoubleType.DOUBLE,
+                "BOOLEAN", BooleanType.BOOLEAN,
+                "JSON", typeManager.fromSqlType(StandardTypes.JSON));
         this.tableNameToEndPointDefinition = new HashMap<>();
         try {
             List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
@@ -79,12 +84,17 @@ public class RestMetadata implements ConnectorMetadata {
         Map<String, ColumnHandle> columnNameToHandle = new HashMap<>();
         for (ColumnDefinition col : definition.columns()) {
             columnNameToHandle.put(col.name(),
-                    new RestColumnHandle(col.name(), TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType())));
+                    new RestColumnHandle(col.name(), typeNameToTrinoType.get(col.trinoType())));
         }
+        // 'Virtual' columns used to indicate that these are columns that will be
+        // handled solely by the api not trino
         if (definition.isPostQuery()) {
             for (PostFilterDefinition filter : definition.postBody().filters()) {
+                if (filter.responseColumn() != null) {
+                    continue;
+                }
                 columnNameToHandle.put(filter.columnName(),
-                        new RestColumnHandle(filter.columnName(), TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType())));
+                        new RestColumnHandle(filter.columnName(), typeNameToTrinoType.get(filter.trinoType())));
             }
         }
         return columnNameToHandle;
@@ -120,26 +130,53 @@ public class RestMetadata implements ConnectorMetadata {
         String tableName = handle.schemaTableName().getTableName();
         EndpointDefinition definition = tableNameToEndPointDefinition.getOrDefault(tableName, null);
         if (definition != null) {
+            boolean isJoinOnly = definition.isPostQuery() && definition.postBody().isRootArray();
+            // A filter with a responseColumn is exposed only once, below, under that column's own
+            // name - map it here so that column can carry the "this is also a required/optional
+            // JOIN key" comment a plain response column otherwise wouldn't have any reason to show.
+            Map<ColumnDefinition, PostFilterDefinition> responseColumnToFilter = definition.isPostQuery()
+                    ? definition.postBody().filters().stream()
+                            .filter(filter -> filter.responseColumn() != null)
+                            .collect(Collectors.toMap(PostFilterDefinition::responseColumn, filter -> filter))
+                    : Map.of();
+
             List<ColumnMetadata> columnMetadata = new ArrayList<>();
             for (ColumnDefinition col : definition.columns()) {
-                columnMetadata.add(ColumnMetadata.builder()
+                ColumnMetadata.Builder columnBuilder = ColumnMetadata.builder()
                         .setName(col.name())
-                        .setType(TYPE_NAME_TO_TRINO_TYPE.get(col.trinoType()))
-                        .build());
+                        .setType(typeNameToTrinoType.get(col.trinoType()));
+                PostFilterDefinition matchedFilter = responseColumnToFilter.get(col);
+                if (matchedFilter != null) {
+                    columnBuilder.setComment(Optional.of(String.format(
+                            "%s JOIN key (%s) - usable only via JOIN, not WHERE",
+                            matchedFilter.required() ? "required" : "optional",
+                            matchedFilter.isArray() ? "accepts multiple values via IN" : "single value only, no IN")));
+                }
+                columnMetadata.add(columnBuilder.build());
             }
+            // 'Virtual' columns used to indicate that these are columns that will be
+            // handled solely by the api not trino
             if (definition.isPostQuery()) {
                 for (PostFilterDefinition filter : definition.postBody().filters()) {
-                    String comment = String.format("%s POST filter (%s)",
+                    if (filter.responseColumn() != null) {
+                        continue;
+                    }
+                    String comment = String.format("%s POST filter (%s)%s",
                             filter.required() ? "required" : "optional",
-                            filter.isArray() ? "accepts multiple values via IN" : "single value only, no IN");
+                            filter.isArray() ? "accepts multiple values via IN" : "single value only, no IN",
+                            isJoinOnly ? " - usable only via JOIN, not WHERE" : "");
                     columnMetadata.add(ColumnMetadata.builder()
                             .setName(filter.columnName())
-                            .setType(TYPE_NAME_TO_TRINO_TYPE.get(filter.trinoType()))
+                            .setType(typeNameToTrinoType.get(filter.trinoType()))
                             .setComment(Optional.of(comment))
                             .build());
                 }
             }
-            return new ConnectorTableMetadata(handle.schemaTableName(), columnMetadata);
+            Optional<String> tableComment = isJoinOnly
+                    ? Optional.of("Bulk-lookup endpoint - queryable only via JOIN, using its required key "
+                            + "column(s) as the join condition. No plain SELECT/WHERE query path exists.")
+                    : Optional.empty();
+            return new ConnectorTableMetadata(handle.schemaTableName(), columnMetadata, Map.of(), tableComment);
         } else {
             throw new NoSuchElementException(String.format("No table with name %s exists within endpoint", tableName));
         }

@@ -30,7 +30,7 @@ public class PostBodyDefinitionTest {
       + "value; IN/OR predicates producing more than one value are not supported for this filter";
 
   private PostBodyDefinition scalarCategoryFilter() {
-    PostFilterDefinition category = new PostFilterDefinition("category", "VARCHAR", true, false, List.of("category"));
+    PostFilterDefinition category = new PostFilterDefinition("VARCHAR", true, false, List.of("category"), null);
     return new PostBodyDefinition(Map.of("category", "{{category}}"), List.of(category));
   }
 
@@ -67,7 +67,7 @@ public class PostBodyDefinitionTest {
     // WHERE request_filter_ids IN (1, 2, 3) - an actual array-declared filter
     // (isArray=true)
     // must keep every value, unlike the scalar case above.
-    PostFilterDefinition ids = new PostFilterDefinition("ids", "BIGINT", false, true, List.of("ids"));
+    PostFilterDefinition ids = new PostFilterDefinition("BIGINT", false, true, List.of("ids"), null);
     PostBodyDefinition postBody = new PostBodyDefinition(Map.of("ids", List.of("{{ids}}")), List.of(ids));
     Map<String, List<String>> resolved = Map.of("ids", List.of("1", "2", "3"));
 

@@ -22,6 +22,7 @@ import io.swagger.v3.oas.models.media.Schema;
 import io.trino.plugin.rest.openapi.ColumnDefinition;
 import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.plugin.rest.openapi.OpenApiSchemaParser;
+import io.trino.plugin.rest.openapi.PostFilterDefinition;
 
 public class OpenApiSchemaParserTest {
 
@@ -74,9 +75,10 @@ public class OpenApiSchemaParserTest {
   @SuppressWarnings("unchecked")
   private List<ColumnDefinition> extractColumns(Schema<?> schema) throws Exception {
     Method method = OpenApiSchemaParser.class.getDeclaredMethod(
-        "extractColumns", Schema.class, String.class, List.class, String.class);
+        "extractColumns", Schema.class, List.class, List.class);
     method.setAccessible(true);
-    return (List<ColumnDefinition>) method.invoke(null, schema, "", new ArrayList<ColumnDefinition>(), "/test");
+    return (List<ColumnDefinition>) method.invoke(null, schema, new ArrayList<ColumnDefinition>(),
+        new ArrayList<String>());
   }
 
   @Test
@@ -320,6 +322,77 @@ public class OpenApiSchemaParserTest {
     Map<String, String> columns = columnsOf(endpoints);
     assertEquals("BIGINT", columns.get("id"));
     assertEquals("VARCHAR", columns.get("name"));
+  }
+
+  @Test
+  void optionalNullableRequestFieldIsStillExposedAsAFilter() throws Exception {
+    // OpenAPI 3.1's idiomatic way to express "nullable X" is `anyOf: [{type: X}, {type: null}]`,
+    // not the older `nullable: true` keyword. getType() only ever checked schema.getType() and
+    // schema.getTypes() - never schema.getAnyOf() - so a field declared this way resolved to no
+    // type at all. Since the field isn't required, that silently dropped it out of
+    // buildRequestTemplate entirely ("optional, unresolvable type: omit the key entirely") rather
+    // than crashing - it just vanished as a usable filter, with no error or warning.
+    String spec = """
+        {
+          "openapi": "3.1.0",
+          "info": { "title": "Test", "version": "1.0" },
+          "paths": {
+            "/lookup": {
+              "post": {
+                "requestBody": {
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": ["id"],
+                          "properties": {
+                            "id": { "type": "string" },
+                            "date": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "responses": {
+                  "200": {
+                    "description": "OK",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string" },
+                              "date": { "type": "string" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+    wm.stubFor(get("/spec").willReturn(okJson(spec)));
+    RestConfig config = new RestConfig(Map.of(
+        "rest.token", "token",
+        "rest.specUrl", wm.baseUrl() + "/spec",
+        "rest.baseUrl", ""));
+
+    List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
+
+    assertEquals(1, endpoints.size());
+    List<String> filterNames = endpoints.get(0).postBody().filters().stream()
+        .map(PostFilterDefinition::name)
+        .collect(Collectors.toList());
+    assertTrue(filterNames.contains("date"), "optional nullable \"date\" field should still be a usable filter");
   }
 
 }
