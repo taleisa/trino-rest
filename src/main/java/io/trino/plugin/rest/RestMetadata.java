@@ -43,8 +43,10 @@ import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.VarcharType;
 
 public class RestMetadata implements ConnectorMetadata {
-    // JsonType isn't part of trino-spi (it lives in trino-main, the engine module) - the
-    // TypeManager every connector receives via ConnectorContext is how a plugin resolves an
+    // JsonType isn't part of trino-spi (it lives in trino-main, the engine module)
+    // - the
+    // TypeManager every connector receives via ConnectorContext is how a plugin
+    // resolves an
     // engine-registered type like "json" by name instead.
     private final Map<String, Type> typeNameToTrinoType;
     private final Map<String, EndpointDefinition> tableNameToEndPointDefinition;
@@ -131,9 +133,12 @@ public class RestMetadata implements ConnectorMetadata {
         EndpointDefinition definition = tableNameToEndPointDefinition.getOrDefault(tableName, null);
         if (definition != null) {
             boolean isJoinOnly = definition.isPostQuery() && definition.postBody().isRootArray();
-            // A filter with a responseColumn is exposed only once, below, under that column's own
-            // name - map it here so that column can carry the "this is also a required/optional
-            // JOIN key" comment a plain response column otherwise wouldn't have any reason to show.
+            // A filter with a responseColumn is exposed only once, below, under that
+            // column's own
+            // name - map it here so that column can carry the "this is also a
+            // required/optional
+            // JOIN key" comment a plain response column otherwise wouldn't have any reason
+            // to show.
             Map<ColumnDefinition, PostFilterDefinition> responseColumnToFilter = definition.isPostQuery()
                     ? definition.postBody().filters().stream()
                             .filter(filter -> filter.responseColumn() != null)
@@ -198,7 +203,12 @@ public class RestMetadata implements ConnectorMetadata {
 
         Map<String, PostFilterDefinition> columnNameToPostFilterDefinition = new HashMap<>();
         for (PostFilterDefinition filter : definition.postBody().filters()) {
-            columnNameToPostFilterDefinition.put(filter.columnName(), filter);
+            // Inlcude PostFilterDefinitions that have 'virtual' columns only.
+            // PostFilterDefinitions that represent real columns should not be handled here.
+            // They are handled during a join.
+            if (filter.responseColumn() == null) {
+                columnNameToPostFilterDefinition.put(filter.columnName(), filter);
+            }
         }
 
         // Since request columns will be sent in the request, they cannot be present
