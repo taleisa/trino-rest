@@ -22,6 +22,15 @@ the request itself. A query like `... JOIN rest.default.enrich e ON ... WHERE e.
 batch still gets looked up rather than skipping batches that can't match. Not required for
 correctness, just an efficiency gap.
 
+## Stream index-lookup responses instead of buffering the full tree
+`RestConnectorIndex.lookup()` calls `MAPPER.readTree(response)`, materializing each batch's
+entire response as an in-memory `JsonNode` tree before reading anything out of it - unlike
+`RestRecordCursor`, which streams. JFR profiling of a large JOIN showed this dominates the
+lookup path's CPU time (Jackson tokenizing + tree construction was ~78% of on-thread samples),
+and it's the same full-buffer pattern `docs/COMPARISON.md` documents as a real memory problem
+for a competing connector. Since only a handful of paths are ever read per response row, a
+streaming/targeted parse could avoid materializing the rest of each row entirely.
+
 ## Benchmark the index-lookup request-building path
 `RestConnectorIndex.lookup()` builds each row's request body via `PostBodyDefinition.buildPostPayload()`
 per row, then serializes the collected list once. Worth benchmarking against Trino's own
@@ -50,6 +59,20 @@ for `RestConnectorIndex.lookup()`. This includes what actually surfaces in Trino
 (the query details/live plan page at `:8080/ui`) - operator-level stats, split info
 (`ConnectorSplit`/index-source stage), not just JMX or logs - since that's where anyone actually
 running a query would look first, not an external log file.
+
+## Verify echoed index-lookup keys against the request that was actually sent
+`RestConnectorIndex.lookup()` correlates a response row back to a probe row purely by the key
+value the target API echoes back in that response object (read via `JsonUtil.walk()` against
+the key column's own path) - never against the value we actually sent for that request slot.
+Trino's own index-join machinery
+then hashes/matches on that same echoed value. Nothing anywhere checks that the echo is honest:
+if the target API has a bug (or is malicious) and returns a response object whose key field
+doesn't match the data actually attached to it, the wrong row gets silently joined onto the probe
+row - no error, no warning. Same blast radius for a dropped key (silently vanishes from an inner
+join) or a duplicated key (silently fans out into extra rows). Worth adding an optional
+verification mode: track which key value was sent for each request slot, and log or fail loudly
+when an echoed key doesn't correspond to anything that was actually requested in that batch.
+
 
 ## Clear error message for non-JOIN queries against bulk-lookup endpoints
 A bulk-lookup endpoint (`PostBodyDefinition.isRootArray() == true`) is only queryable via an

@@ -36,7 +36,7 @@ running a query and rows coming back.
 | `EndpointDefinition` | *(plain record)* | One REST endpoint: path, table name, response columns, whether the response is a root array, and an optional `PostBodyDefinition` for POST-backed tables (filter-POST or bulk-lookup, distinguished by `PostBodyDefinition.isRootArray()`). |
 | `ColumnDefinition` | *(plain record)* | One response field: name + Trino type. |
 | `PostBodyDefinition` | *(plain record)* | POST request template (`requestBody`), its filter/key fields (`filters`), and whether the body is a root array. `buildPostPayload` fills the template from resolved values; `serialize` turns any filled object (or batch of them) into the final JSON string. |
-| `PostFilterDefinition` | *(plain record)* | One POST-body field usable as a WHERE-clause filter or index-lookup key: raw name, Trino type, required-ness, whether it's array-typed, and its path into the template. `columnName()` is the Trino-visible name (`request_filter_`-prefixed); `name()` is the raw field name the target API actually uses. |
+| `PostFilterDefinition` | *(plain record)* | One POST-body field usable as a WHERE-clause filter or index-lookup key: Trino type, required-ness, whether it's array-typed, its path into the request template, and an optional link (`responseColumn`) to its response-side counterpart, resolved case-insensitively at spec-parse time. `name()` is the raw field name (path joined with `_`); `columnName()` is the Trino-visible name - the linked response column's own name when `responseColumn` is set, else a `request_filter_`-prefixed fallback. |
 
 All the "wire types" — `RestTableHandle`, `RestColumnHandle`, `RestSplit`,
 `RestIndexHandle`, `EndpointDefinition`, `ColumnDefinition`,
@@ -152,7 +152,7 @@ flowchart TD
         I["IndexSourceOperator reads the probe side<br/>in bounded chunks"]
         J["index.lookup(recordSet)<br/>→ RestConnectorIndex.lookup()"]
         K["Build one request row per input row<br/>(buildPostPayload per row), POST the array"]
-        L["Parse response, shape rows to outputSchema<br/>(key columns looked up by raw filter name,<br/>not the request_filter_* Trino column name)"]
+        L["Parse response, shape rows to outputSchema<br/>(every output column, keys included, read via its<br/>own name/path - a linked key column's own name<br/>IS the response field name, resolved case-insensitively<br/>at spec-parse time)"]
         I --> J --> K --> L
     end
 

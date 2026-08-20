@@ -91,18 +91,21 @@ verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP r
    SELECT p.name, e.discount_pct
    FROM memory.default.products p
    JOIN rest.default.enrich e
-     ON p.name = e.request_filter_product_name
-    AND p.date = e.request_filter_date
+     ON p.name = e.product_name
+    AND p.date = e.date
    ```
-   Note the join condition uses the `request_filter_*`-prefixed columns, not the plain
-   `product_name`/`date` that also exist on this table (echoed back from the response) - only
-   the prefixed names are recognized as index keys by `resolveIndex`.
+   The join condition uses the plain `product_name`/`date` columns - `PostFilterDefinition`
+   resolves each request key to its response-side column (by case-insensitive name match, at
+   spec-parse time), and `columnName()` returns that response column's real name whenever a
+   link exists. A key only falls back to a `request_filter_*`-prefixed name when no matching
+   response field could be found for it - see README's "Bulk lookup / index join, explained"
+   section for that case.
    No special syntax - the whole point of using `ConnectorIndex` instead of a table function.
 
 2. Trino's planner considers this `JOIN` and asks each side "can you serve as an index for
    this?" For our side, it calls
    `RestMetadata.resolveIndex(session, tableHandle, indexableColumns, outputColumns, tupleDomain)`
-   - passing the join-key columns (`request_filter_product_name`, `request_filter_date`) as
+   - passing the join-key columns (`product_name`, `date`) as
    `indexableColumns` and whatever columns the query needs back (`discount_pct`, plus the keys)
    as `outputColumns`. **We enter here first.** We check whether `indexableColumns` matches our
    endpoint's bulk-lookup keys (`postBody().filters()`) and all required keys are covered. If
@@ -134,12 +137,15 @@ verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP r
    `/enrich`, parses the response, and returns a page shaped to `outputSchema`.
 
    **A real bug lived here, worth remembering**: the output page's key-column values were
-   looked up in the parsed response using the Trino column name
-   (`request_filter_product_name`), but the target API only ever echoes back the bare field
-   name (`product_name`) - so every key column came back `null`, and the join silently returned
-   zero rows (never an error, since `null` just never matches anything). Fixed by looking up
-   filter/key columns under their raw `PostFilterDefinition.name()` instead of `columnName()`.
-   Covered by `RestConnectorIndexTest.lookupReturnsKeyColumnValuesNotNull`.
+   looked up in the parsed response by an exact-match Trino column name, but request and
+   response schemas are authored independently and often disagree on casing for the same field
+   (e.g. request `ip`, response `IP`) - so a mismatched key column came back `null` for every
+   row, and the join silently returned zero rows (never an error, since `null` just never
+   matches anything). Fixed by resolving each filter's response-side column once, at
+   spec-parse time, matching names case-insensitively (`PostFilterDefinition.responseColumn`) -
+   the linked column's own name and path are then used to read the value, same as any other
+   output column. Covered by `RestConnectorIndexTest.lookupReturnsKeyColumnValuesNotNull` and
+   `RestConnectorIndexTest.keyColumnMatchesResponseFieldCaseInsensitively`.
 
 5. Everything after that is Trino's engine, not our code. `IndexSnapshotBuilder` takes our
    returned page and builds a hash-keyed snapshot from it (using the key columns that are part
