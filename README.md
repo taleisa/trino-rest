@@ -32,8 +32,8 @@ So this connector maps a bulk endpoint to an ordinary SQL `JOIN` instead:
 SELECT p.name, e.discount_pct
 FROM some_catalog.default.products p
 JOIN rest_catalog.default.enrich e
-  ON p.name = e.request_filter_product_name
- AND p.date = e.request_filter_date
+  ON p.name = e.product_name
+ AND p.date = e.date
 ```
 
 No special syntax - Trino's own query planner recognizes this as a candidate for an *index join*
@@ -42,25 +42,41 @@ calls into this connector to resolve it. Under the hood, Trino feeds the probe s
 (`products`) through in bounded batches, and each batch becomes one `POST` call to the bulk
 endpoint with that batch's keys - never the whole probe table loaded into memory at once, and
 never more than one request in flight building the array for a given batch. The endpoint's
-response has to echo the key fields back (`product_name`/`date` in the example above) so Trino
-can correlate each result back to the probe row that produced it.
+response has to echo the key fields back so Trino can correlate each result back to the probe row
+that produced it.
 
-Two consequences worth knowing before using this: the join condition must reference this table's
-`request_filter_*`-prefixed columns specifically (not any plain, same-named column that happens
-to also exist from the response schema), and a bulk-lookup table can *only* be queried this way -
-a plain `SELECT * FROM rest_catalog.default.enrich` with no `JOIN` has no required values to send
-and will fail rather than silently returning nothing (though the current error message for that
-case is generic, not yet specific to "this table needs a JOIN" - see `docs/TODOS.md`).
+Two consequences worth knowing before using this:
+
+- **A join key field must appear under a matching name (case-insensitively) in both the request
+  and the response.** The join condition above works because the endpoint's response happens to
+  echo the key back as `product_name`/`date` - the same names (ignoring case) the request uses.
+  This connector links a request field to its response counterpart once, at spec-parse time, by
+  matching names case-insensitively (e.g. request `ip`, response `IP` still link up fine) - that's
+  the only signal available, since OpenAPI has no way to declare "this response field is the same
+  concept as that differently-named request field." **If an endpoint's request and response use
+  genuinely different names for the same key** (e.g. the request takes `name` but the response
+  echoes the looked-up value back as `ip`, not `name`), **no link can be established, and a JOIN
+  on that field is not supported** - it will not error, but the result will always be empty,
+  since there is nothing to correlate results back to probe rows with. Such a field stays exposed
+  under a `request_filter_*`-prefixed name, signaling it's write-only (usable to build the
+  request, not readable, and not usable as a join key in practice).
+- **A bulk-lookup table can only be queried via `JOIN`** - a plain `SELECT * FROM
+  rest_catalog.default.enrich` with no `JOIN` has no required values to send and will fail rather
+  than silently returning nothing (though the current error message for that case is generic, not
+  yet specific to "this table needs a JOIN" - see `docs/TODOS.md`).
 
 See [`docs/FLOWS.md`](docs/FLOWS.md)'s "bulk lookup / index join" section for the full mechanism
 trace - which method fires when, how many times per query, and what Trino does internally with
 the results.
 
-Every response is parsed incrementally via a streaming JSON parser - a response is never
-buffered in full, so response size doesn't translate into proportional memory use. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how that's implemented, and
-[`docs/FLOWS.md`](docs/FLOWS.md) for a step-by-step trace of all three query paths, including
-which internal method gets called when.
+For the GET and filter-POST shapes, a response is parsed incrementally via a streaming JSON
+parser - never buffered in full, so response size doesn't translate into proportional memory
+use. The bulk-lookup/index-join shape doesn't do this yet: each batch's response is parsed into
+an in-memory tree before being read, so its memory use scales with batch size (bounded by
+Trino's own per-batch chunking, not unbounded, but not the same guarantee as the other two
+shapes - see `docs/TODOS.md`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the
+streaming path is implemented, and [`docs/FLOWS.md`](docs/FLOWS.md) for a step-by-step trace of
+all three query paths, including which internal method gets called when.
 
 ## Requirements
 
@@ -145,3 +161,9 @@ SHOW TABLES FROM mycatalog.default; -- one row per discovered endpoint
 - [`docs/COMPARISON.md`](docs/COMPARISON.md) - a detailed, verified comparison against
   `nineinchnick/trino-openapi`, and why this project exists as its own connector.
 - [`docs/TODOS.md`](docs/TODOS.md) - known gaps and planned work.
+- [`docs/release-notes/`](docs/release-notes/) - what changed release to release, one file per
+  version.
+
+## License
+
+[Apache License 2.0](LICENSE).
