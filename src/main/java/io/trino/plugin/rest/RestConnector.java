@@ -1,6 +1,5 @@
 package io.trino.plugin.rest;
 
-import io.trino.plugin.rest.openapi.EndpointDefinition;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorIndexProvider;
 import io.trino.spi.connector.ConnectorMetadata;
@@ -20,7 +19,7 @@ public class RestConnector implements Connector {
     public RestConnector(RestConfig config, TypeManager typeManager) throws Exception {
         this.config = config;
         this.metadata = new RestMetadata(config, typeManager);
-        this.splitManager = new RestSplitManager(config, metadata.getTableNameToEndPointDefinition());
+        this.splitManager = new RestSplitManager(config, metadata);
         this.recordSetProvider = new RestRecordSetProvider(config);
     }
 
@@ -54,9 +53,7 @@ public class RestConnector implements Connector {
 
         return (transactionHandle, session, indexHandle, lookupSchema, outputSchema) -> {
             RestIndexHandle handle = (RestIndexHandle) indexHandle;
-            EndpointDefinition definition = metadata.getTableNameToEndPointDefinition()
-                    .get(handle.schemaTableName().getTableName());
-            return new RestConnectorIndex(config, definition, lookupSchema, outputSchema);
+            return new RestConnectorIndex(config, handle.endpointDefinition(), lookupSchema, outputSchema);
         };
     }
 }
