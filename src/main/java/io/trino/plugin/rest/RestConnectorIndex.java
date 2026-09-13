@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -65,29 +67,36 @@ public class RestConnectorIndex implements ConnectorIndex {
         String uri = config.getBaseUrl() + definition.path();
         InputStream response = new RestHttpClient(config).post(uri, PostBodyDefinition.serialize(payloads));
 
-        JsonNode responseRows;
-        try {
-            responseRows = MAPPER.readTree(response);
-        } catch (IOException e) {
-            throw new RuntimeException(String.format("Failed to parse index lookup response from %s", uri), e);
-        }
-
         List<Type> outputTypes = outputSchema.stream()
                 .map(columnHandle -> ((RestColumnHandle) columnHandle).columnType())
                 .collect(Collectors.toList());
 
         List<List<Object>> records = new ArrayList<>();
-        for (JsonNode responseRow : responseRows) {
-            List<Object> record = new ArrayList<>();
-            for (ColumnHandle columnHandle : outputSchema) {
-                RestColumnHandle restColumnHandle = (RestColumnHandle) columnHandle;
-                ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
-                JsonNode rawValue = column != null
-                        ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
-                        : null;
-                record.add(normalizeForType(restColumnHandle.columnType(), rawValue));
+        try (response; JsonParser parser = MAPPER.getFactory().createParser(response)) {
+            JsonToken token = parser.nextToken();
+            if (token != JsonToken.START_ARRAY) {
+                throw new RuntimeException(
+                        String.format("Expected root JSON array in response from %s but got %s", uri, token));
             }
-            records.add(record);
+            while (true) {
+                token = parser.nextToken();
+                if (token == null || token == JsonToken.END_ARRAY) {
+                    break;
+                }
+                JsonNode responseRow = MAPPER.readTree(parser);
+                List<Object> record = new ArrayList<>();
+                for (ColumnHandle columnHandle : outputSchema) {
+                    RestColumnHandle restColumnHandle = (RestColumnHandle) columnHandle;
+                    ColumnDefinition column = columnNameToDefinition.get(restColumnHandle.columnName());
+                    JsonNode rawValue = column != null
+                            ? JsonUtil.walk(responseRow, restColumnHandle.columnName(), column.path(), uri)
+                            : null;
+                    record.add(normalizeForType(restColumnHandle.columnType(), rawValue));
+                }
+                records.add(record);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("Failed to parse index lookup response from %s", uri), e);
         }
 
         return new RecordPageSource(new InMemoryRecordSet(outputTypes, records));
