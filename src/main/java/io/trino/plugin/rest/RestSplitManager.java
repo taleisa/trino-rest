@@ -52,7 +52,15 @@ public class RestSplitManager implements ConnectorSplitManager {
                 missingRequiredFilters.add(filter.columnName());
             }
         }
-        if (!missingRequiredFilters.isEmpty()) {
+        // Joins do not end here in gets split, so throw error if a join only table ends
+        // up here.
+        if (endpoint.isPostQuery() && endpoint.postBody().isRootArray()) {
+            throw new TrinoException(StandardErrorCode.GENERIC_USER_ERROR,
+                    String.format("Table %s can only be used in a join.", endpoint.tableName()));
+        }
+        if (!missingRequiredFilters.isEmpty())
+
+        {
             // No WHERE predicate resolved a value for a required filter, so there's no way
             // to build a valid POST body - fail rather than send a request the target API
             // would reject anyway. This can happen even when the column IS mentioned in the
