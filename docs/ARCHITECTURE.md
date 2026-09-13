@@ -24,7 +24,7 @@ running a query and rows coming back.
 | `RestTableHandle` | `ConnectorTableHandle` | Wraps a `SchemaTableName` plus `resolvedFilterValues` — WHERE-clause values resolved for filter-POST tables, accumulated across `applyFilter` rounds. |
 | `RestColumnHandle` | `ColumnHandle` | `columnName` + `columnType`; can rebuild a full `ColumnMetadata` on demand. |
 | `RestIndexHandle` | `ConnectorIndexHandle` | `SchemaTableName` plus the coordinator's `EndpointDefinition`. `resolveIndex()` fills it; worker `getIndex()` uses `handle.endpointDefinition()` and does not re-look up a local parse. Same shipping pattern as `RestSplit`. |
-| `RestSplitManager` | `ConnectorSplitManager` | Turns a table handle into split(s). Currently always exactly one `RestSplit` per query — no partitioning. |
+| `RestSplitManager` | `ConnectorSplitManager` | Turns a table handle into split(s). Currently always exactly one `RestSplit` per query — no partitioning. A bulk-lookup table (`postBody().isRootArray()`) has no scan path: `getSplits` throws `Table … can only be used in a join.` Filter-POST with a missing `WHERE` still uses the "missing resolvable predicate" error. |
 | `RestSplit` | `ConnectorSplit` | `uri` + the endpoint's `EndpointDefinition`, plus an optional pre-built request body (filter-POST tables). |
 | `RestRecordSetProvider` | `ConnectorRecordSetProvider` | Given a split + selected columns, builds a `RestRecordSet`. |
 | `RestRecordSet` | `RecordSet` | Thin, lazy wrapper — `.cursor()` builds a `RestRecordCursor`. |
@@ -78,7 +78,7 @@ flowchart TD
     subgraph Coordinator["COORDINATOR — per query"]
         B["RestMetadata.getTableHandle()"]
         C["getColumnHandles() / getColumnMetadata()<br/>applyFilter() too, for filter-POST tables"]
-        D["RestSplitManager.getSplits() → builds RestSplit<br/>(GET: no body. filter-POST: postBody.buildPostPayload() + serialize())"]
+        D["RestSplitManager.getSplits() → builds RestSplit<br/>(GET: no body. filter-POST: postBody.buildPostPayload() + serialize()<br/>bulk-lookup: throw join-only)"]
         B --> C --> D
     end
 

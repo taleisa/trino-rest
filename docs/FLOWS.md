@@ -83,7 +83,10 @@ after the full fetch, inside Trino.
 **Status: done.** `RestIndexHandle`, `RestMetadata.resolveIndex()`,
 `RestConnector.getIndexProvider()`, and `RestConnectorIndex.lookup()` are all implemented and
 verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP round trip to
-`/enrich`, correct correlated results). Covered by `RestConnectorIndexTest`.
+`/enrich`, correct correlated results). Covered by `RestConnectorIndexTest`. A scan of the
+same table (`SELECT * FROM rest.default.enrich` with no `JOIN`) hits `RestSplitManager.getSplits`
+and throws `Table enrich can only be used in a join.` — not the filter-POST missing-predicate
+error. Covered by `RestMetadataTest.selectStarOnBulkLookupTableFailsWithJoinOnlyMessage`.
 
 **The flow, end to end**
 
@@ -116,7 +119,8 @@ verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP r
    quietly falls back to a normal query path. But if it *is* a bulk-lookup endpoint and the
    join's columns don't match its keys, we throw a `TrinoException` instead of returning empty -
    there's no valid non-index way to query a bulk-lookup-only table, so failing here with a clear
-   message is better than a confusing failure later in `RestSplitManager`.
+   message is better than falling through to a scan. A scan of this table (`getSplits`) also
+   fails, with `Table … can only be used in a join.`
 
    This call happens **once per query, during planning** - not once per batch, not once per
    row.

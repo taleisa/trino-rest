@@ -61,9 +61,9 @@ Two consequences worth knowing before using this:
   under a `request_filter_*`-prefixed name, signaling it's write-only (usable to build the
   request, not readable, and not usable as a join key in practice).
 - **A bulk-lookup table can only be queried via `JOIN`** - a plain `SELECT * FROM
-  rest_catalog.default.enrich` with no `JOIN` has no required values to send and will fail rather
-  than silently returning nothing (though the current error message for that case is generic, not
-  yet specific to "this table needs a JOIN" - see `docs/TODOS.md`).
+  rest_catalog.default.enrich` with no `JOIN` has no keys to send and fails with
+  `Table enrich can only be used in a join.` rather than a filter-POST "missing predicate"
+  error.
 
 See [`docs/FLOWS.md`](docs/FLOWS.md)'s "bulk lookup / index join" section for the full mechanism
 trace - which method fires when, how many times per query, and what Trino does internally with
