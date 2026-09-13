@@ -49,28 +49,36 @@ public class RestMetadata implements ConnectorMetadata {
     // resolves an
     // engine-registered type like "json" by name instead.
     private final Map<String, Type> typeNameToTrinoType;
-    private final Map<String, EndpointDefinition> tableNameToEndPointDefinition;
+    private Map<String, EndpointDefinition> tableNameToEndPointDefinition;
+    private final RestConfig config;
     private static final Logger log = Logger.get(RestMetadata.class);
 
     public RestMetadata(RestConfig config, TypeManager typeManager) {
+        this.config = config;
         this.typeNameToTrinoType = Map.of(
                 "VARCHAR", VarcharType.VARCHAR,
                 "BIGINT", BigintType.BIGINT,
                 "DOUBLE", DoubleType.DOUBLE,
                 "BOOLEAN", BooleanType.BOOLEAN,
                 "JSON", typeManager.fromSqlType(StandardTypes.JSON));
-        this.tableNameToEndPointDefinition = new HashMap<>();
+    }
+
+    // To avoid potentially having some workers holding valid
+    // tableNameToEndPointDefinition and others not, this getter should only be
+    // called in methods executed by the trino coordinator.
+    public synchronized Map<String, EndpointDefinition> getTableNameToEndPointDefinition() {
+        if (tableNameToEndPointDefinition != null && !tableNameToEndPointDefinition.isEmpty()) {
+            return tableNameToEndPointDefinition;
+        }
+        Map<String, EndpointDefinition> endpoints = new HashMap<>();
         try {
-            List<EndpointDefinition> endpoints = OpenApiSchemaParser.parse(config);
-            for (EndpointDefinition endpoint : endpoints) {
-                tableNameToEndPointDefinition.put(endpoint.tableName(), endpoint);
+            for (EndpointDefinition endpoint : OpenApiSchemaParser.parse(config)) {
+                endpoints.put(endpoint.tableName(), endpoint);
             }
         } catch (Exception e) {
             log.warn(e, "Failed to parse OpenAPI spec");
         }
-    }
-
-    public Map<String, EndpointDefinition> getTableNameToEndPointDefinition() {
+        tableNameToEndPointDefinition = endpoints;
         return tableNameToEndPointDefinition;
     }
 
@@ -82,7 +90,7 @@ public class RestMetadata implements ConnectorMetadata {
     @Override
     public Map<String, ColumnHandle> getColumnHandles(ConnectorSession session, ConnectorTableHandle table) {
         RestTableHandle handle = (RestTableHandle) table;
-        EndpointDefinition definition = tableNameToEndPointDefinition.get(handle.schemaTableName().getTableName());
+        EndpointDefinition definition = getTableNameToEndPointDefinition().get(handle.schemaTableName().getTableName());
         Map<String, ColumnHandle> columnNameToHandle = new HashMap<>();
         for (ColumnDefinition col : definition.columns()) {
             columnNameToHandle.put(col.name(),
@@ -111,7 +119,7 @@ public class RestMetadata implements ConnectorMetadata {
     @Override
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName) {
         List<SchemaTableName> tableNames = new ArrayList<>();
-        for (String tableName : tableNameToEndPointDefinition.keySet()) {
+        for (String tableName : getTableNameToEndPointDefinition().keySet()) {
             tableNames.add(new SchemaTableName("default", tableName));
         }
         return tableNames;
@@ -120,7 +128,7 @@ public class RestMetadata implements ConnectorMetadata {
     @Override
     public ConnectorTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName,
             Optional<ConnectorTableVersion> startVersion, Optional<ConnectorTableVersion> endVersion) {
-        if (tableNameToEndPointDefinition.containsKey(tableName.getTableName())) {
+        if (getTableNameToEndPointDefinition().containsKey(tableName.getTableName())) {
             return new RestTableHandle(tableName);
         }
         return null;
@@ -130,7 +138,7 @@ public class RestMetadata implements ConnectorMetadata {
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table) {
         RestTableHandle handle = (RestTableHandle) table;
         String tableName = handle.schemaTableName().getTableName();
-        EndpointDefinition definition = tableNameToEndPointDefinition.getOrDefault(tableName, null);
+        EndpointDefinition definition = getTableNameToEndPointDefinition().getOrDefault(tableName, null);
         if (definition != null) {
             boolean isJoinOnly = definition.isPostQuery() && definition.postBody().isRootArray();
             // A filter with a responseColumn is exposed only once, below, under that
@@ -196,7 +204,7 @@ public class RestMetadata implements ConnectorMetadata {
     public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(ConnectorSession session,
             ConnectorTableHandle table, Constraint constraint) {
         RestTableHandle handle = (RestTableHandle) table;
-        EndpointDefinition definition = tableNameToEndPointDefinition.get(handle.schemaTableName().getTableName());
+        EndpointDefinition definition = getTableNameToEndPointDefinition().get(handle.schemaTableName().getTableName());
         if (definition == null || !definition.isPostQuery()) {
             return Optional.empty();
         }
@@ -318,7 +326,7 @@ public class RestMetadata implements ConnectorMetadata {
             Set<ColumnHandle> indexableColumns, Set<ColumnHandle> outputColumns,
             TupleDomain<ColumnHandle> tupleDomain) {
         RestTableHandle handle = (RestTableHandle) tableHandle;
-        EndpointDefinition endpointDefinition = tableNameToEndPointDefinition
+        EndpointDefinition endpointDefinition = getTableNameToEndPointDefinition()
                 .get(handle.schemaTableName().getTableName());
 
         if (endpointDefinition == null || !endpointDefinition.isPostQuery()
@@ -353,7 +361,8 @@ public class RestMetadata implements ConnectorMetadata {
                             handle.schemaTableName().getTableName(), knownKeyColumnNames, indexableColumnNames));
         }
 
-        return Optional.of(new ConnectorResolvedIndex(new RestIndexHandle(handle.schemaTableName()), tupleDomain));
+        return Optional.of(new ConnectorResolvedIndex(
+                new RestIndexHandle(handle.schemaTableName(), endpointDefinition), tupleDomain));
     }
 
 }

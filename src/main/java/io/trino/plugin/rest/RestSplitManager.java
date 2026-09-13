@@ -20,11 +20,11 @@ import io.trino.spi.connector.FixedSplitSource;
 
 public class RestSplitManager implements ConnectorSplitManager {
     private final RestConfig config;
-    private final Map<String, EndpointDefinition> endpointsByTable;
+    private final RestMetadata metadata;
 
-    public RestSplitManager(RestConfig config, Map<String, EndpointDefinition> endpointsByTable) {
+    public RestSplitManager(RestConfig config, RestMetadata metadata) {
         this.config = config;
-        this.endpointsByTable = endpointsByTable;
+        this.metadata = metadata;
     }
 
     @Override
@@ -35,7 +35,8 @@ public class RestSplitManager implements ConnectorSplitManager {
             DynamicFilter dynamicFilter,
             Constraint constraint) {
         RestTableHandle handle = (RestTableHandle) table;
-        EndpointDefinition endpoint = endpointsByTable.get(handle.schemaTableName().getTableName());
+        EndpointDefinition endpoint = metadata.getTableNameToEndPointDefinition()
+                .get(handle.schemaTableName().getTableName());
         String uri = config.getBaseUrl() + endpoint.path();
 
         if (!endpoint.isPostQuery()) {

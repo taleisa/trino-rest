@@ -2,17 +2,21 @@ package io.trino.plugin.rest;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
+import io.trino.spi.connector.ConnectorResolvedIndex;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
@@ -27,6 +31,8 @@ import io.trino.spi.type.TypeSignature;
 import io.trino.spi.type.VarcharType;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -210,5 +216,33 @@ public class RestMetadataTest {
         TupleDomain.withColumnDomains(Map.of(unmatchedColumn, notNullDomain)));
 
     assertThrows(TrinoException.class, () -> metadata.applyFilter(null, tableHandle, constraint));
+  }
+
+  @Test
+  void constructorDoesNotFetchSpec() {
+    RestConfig config = new RestConfig(Map.of(
+        "rest.token", "token",
+        "rest.specUrl", wm.baseUrl() + "/spec",
+        "rest.baseUrl", wm.baseUrl()));
+    new RestMetadata(config, FAKE_TYPE_MANAGER);
+    wm.verify(0, getRequestedFor(urlEqualTo("/spec")));
+  }
+
+  @Test
+  void resolveIndexShipsEndpointDefinitionOnHandle() throws Exception {
+    RestMetadata metadata = metadataFor(ROOT_ARRAY_SPEC);
+    ConnectorTableHandle tableHandle = metadata.getTableHandle(null,
+        new SchemaTableName("default", "lookup"), Optional.empty(), Optional.empty());
+    Map<String, ColumnHandle> columns = metadata.getColumnHandles(null, tableHandle);
+    RestColumnHandle ipColumn = (RestColumnHandle) columns.get("ip");
+
+    Optional<ConnectorResolvedIndex> resolved = metadata.resolveIndex(
+        null, tableHandle, Set.of(ipColumn), Set.of(ipColumn), TupleDomain.all());
+
+    assertTrue(resolved.isPresent());
+    RestIndexHandle indexHandle = (RestIndexHandle) resolved.get().getIndexHandle();
+    assertEquals("lookup", indexHandle.schemaTableName().getTableName());
+    assertNotNull(indexHandle.endpointDefinition());
+    assertEquals("/lookup", indexHandle.endpointDefinition().path());
   }
 }
