@@ -14,11 +14,12 @@ calls, and which of our classes handles each call.
    ```
    Nothing special - a GET-backed table with no filter pushdown support at all.
 
-2. Trino calls `RestMetadata.getTableHandle()` / `getColumnHandles()` as part of planning.
-   If a `WHERE` clause is present, Trino may call `RestMetadata.applyFilter()` - but for a
-   GET-only table, `definition.isPostQuery()` is false, so `applyFilter()` returns
-   `Optional.empty()` immediately. No pushdown happens; Trino applies `WHERE price > 10`
-   itself, after the fact, against every row we hand back.
+2. Trino calls `RestMetadata.getTableHandle()` / `getColumnHandles()` as part of planning
+   (coordinator only). The first of these that needs the table list lazily parses the
+   OpenAPI spec if it is not already loaded. If a `WHERE` clause is present, Trino may call
+   `RestMetadata.applyFilter()` - but for a GET-only table, `definition.isPostQuery()` is
+   false, so `applyFilter()` returns `Optional.empty()` immediately. No pushdown happens;
+   Trino applies `WHERE price > 10` itself, after the fact, against every row we hand back.
 
 3. Trino calls `RestSplitManager.getSplits()`. Since `endpoint.isPostQuery()` is false, it
    builds the URI (`config.getBaseUrl() + endpoint.path()`) and returns a single split
@@ -109,7 +110,8 @@ verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP r
    `indexableColumns` and whatever columns the query needs back (`discount_pct`, plus the keys)
    as `outputColumns`. **We enter here first.** We check whether `indexableColumns` matches our
    endpoint's bulk-lookup keys (`postBody().filters()`) and all required keys are covered. If
-   yes, we return `Optional.of(new ConnectorResolvedIndex(new RestIndexHandle(...), tupleDomain))`.
+   yes, we return `Optional.of(new ConnectorResolvedIndex(new RestIndexHandle(schemaTableName, endpointDefinition), tupleDomain))` —
+   the handle carries the coordinator's `EndpointDefinition`, the same way a `RestSplit` carries it on the scan path.
    If the table isn't a bulk-lookup endpoint at all, we return `Optional.empty()` and Trino
    quietly falls back to a normal query path. But if it *is* a bulk-lookup endpoint and the
    join's columns don't match its keys, we throw a `TrinoException` instead of returning empty -
@@ -123,10 +125,11 @@ verified live end-to-end (`JOIN` against a `memory` connector table, real HTTP r
    actual worker object to call. It calls `Connector.getIndexProvider()` to get our
    `ConnectorIndexProvider`, then calls
    `getIndex(transactionHandle, session, indexHandle, lookupSchema, outputSchema)` on it -
-   handing back the `RestIndexHandle` we returned in step 2. **We enter here second:** cast the
-   handle back, look up the matching `EndpointDefinition`, and construct one
-   `RestConnectorIndex` instance carrying that definition plus the schemas. This also happens
-   **once per query**, not per batch.
+   handing back the `RestIndexHandle` we returned in step 2. **We enter here second, on the
+   worker:** take `handle.endpointDefinition()` and construct one `RestConnectorIndex`
+   instance carrying that definition plus the schemas. This does not consult the worker's
+   local spec parse — a worker that never fetched `specUrl` still runs the join. This also
+   happens **once per query**, not per batch.
 
 4. Execution begins. Trino's `IndexSourceOperator` reads the probe side (`memory.default.products`)
    in bounded chunks - confirmed via decompile, capped at `expectedPositions=10000` plus a
