@@ -69,14 +69,10 @@ See [`docs/FLOWS.md`](docs/FLOWS.md)'s "bulk lookup / index join" section for th
 trace - which method fires when, how many times per query, and what Trino does internally with
 the results.
 
-For the GET and filter-POST shapes, a response is parsed incrementally via a streaming JSON
-parser - never buffered in full, so response size doesn't translate into proportional memory
-use. The bulk-lookup/index-join shape doesn't do this yet: each batch's response is parsed into
-an in-memory tree before being read, so its memory use scales with batch size (bounded by
-Trino's own per-batch chunking, not unbounded, but not the same guarantee as the other two
-shapes - see `docs/TODOS.md`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the
-streaming path is implemented, and [`docs/FLOWS.md`](docs/FLOWS.md) for a step-by-step trace of
-all three query paths, including which internal method gets called when.
+GET, filter-POST, and bulk-lookup JOIN all parse the response incrementally via a streaming
+JSON parser (`JsonParser` + one object at a time). The JOIN path still holds the selected
+output cells for the current batch (`InMemoryRecordSet`, capped by Trino at 10 000 probe rows).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/FLOWS.md`](docs/FLOWS.md).
 
 ## Requirements
 

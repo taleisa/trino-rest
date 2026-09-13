@@ -114,7 +114,7 @@ error. Covered by `RestMetadataTest.selectStarOnBulkLookupTableFailsWithJoinOnly
    as `outputColumns`. **We enter here first.** We check whether `indexableColumns` matches our
    endpoint's bulk-lookup keys (`postBody().filters()`) and all required keys are covered. If
    yes, we return `Optional.of(new ConnectorResolvedIndex(new RestIndexHandle(schemaTableName, endpointDefinition), tupleDomain))` —
-   the handle carries the coordinator's `EndpointDefinition`, the same way a `RestSplit` carries it on the scan path.
+   the handle carries the coordinator's `EndpointDefinition`.
    If the table isn't a bulk-lookup endpoint at all, we return `Optional.empty()` and Trino
    quietly falls back to a normal query path. But if it *is* a bulk-lookup endpoint and the
    join's columns don't match its keys, we throw a `TrinoException` instead of returning empty -
@@ -141,7 +141,9 @@ error. Covered by `RestMetadataTest.selectStarOnBulkLookupTableFailsWithJoinOnly
    `index.lookup(recordSet)` - the `recordSet` being that chunk's `product_name`/`date` pairs.
    **We enter here third**, and this is the part that actually runs per batch, potentially many
    times per query: `RestConnectorIndex.lookup()` builds the request rows, POSTs them to
-   `/enrich`, parses the response, and returns a page shaped to `outputSchema`.
+   `/enrich`, streams the response array one object at a time (`JsonParser`), and returns a
+   page shaped to `outputSchema`. Selected output cells for the batch are held in an
+   `InMemoryRecordSet`.
 
    **A real bug lived here, worth remembering**: the output page's key-column values were
    looked up in the parsed response by an exact-match Trino column name, but request and

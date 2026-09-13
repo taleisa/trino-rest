@@ -29,7 +29,7 @@ running a query and rows coming back.
 | `RestRecordSetProvider` | `ConnectorRecordSetProvider` | Given a split + selected columns, builds a `RestRecordSet`. |
 | `RestRecordSet` | `RecordSet` | Thin, lazy wrapper — `.cursor()` builds a `RestRecordCursor`. |
 | `RestRecordCursor` | `RecordCursor` | Constructor fires the request and opens a streaming JSON parser over the response. Every `advanceNextPosition()`/getter call reads incrementally from that stream — nothing is buffered as a full in-memory list. |
-| `RestConnectorIndex` | `ConnectorIndex` | `lookup(RecordSet)` — the actual per-batch HTTP call for the bulk-lookup/index-join path: builds the request array from the batch's key rows, POSTs it, parses the response, returns a page shaped to the requested output columns. |
+| `RestConnectorIndex` | `ConnectorIndex` | `lookup(RecordSet)` — the actual per-batch HTTP call for the bulk-lookup/index-join path: builds the request array from the batch's key rows, POSTs it, streams the response array one object at a time (`JsonParser`), returns a page shaped to the requested output columns. |
 | `RestHttpClient` | *(plain helper)* | Builds and sends the actual `java.net.http.HttpRequest` (GET or POST) with the bearer token. |
 | `RestConfig` | *(plain helper)* | Parses `rest.token` / `rest.specUrl` / `rest.specPath` / `rest.baseUrl` from catalog properties. |
 | `OpenApiSchemaParser` | *(plain helper)* | Fetches + parses the OpenAPI spec into `EndpointDefinition`s. |
@@ -154,7 +154,7 @@ flowchart TD
         I["IndexSourceOperator reads the probe side<br/>in bounded chunks"]
         J["index.lookup(recordSet)<br/>→ RestConnectorIndex.lookup()"]
         K["Build one request row per input row<br/>(buildPostPayload per row), POST the array"]
-        L["Parse response, shape rows to outputSchema<br/>(every output column, keys included, read via its<br/>own name/path - a linked key column's own name<br/>IS the response field name, resolved case-insensitively<br/>at spec-parse time)"]
+        L["Stream response array one object at a time<br/>(JsonParser + readTree per row),<br/>shape rows to outputSchema"]
         I --> J --> K --> L
     end
 
