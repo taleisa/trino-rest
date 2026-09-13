@@ -22,14 +22,28 @@ the request itself. A query like `... JOIN rest.default.enrich e ON ... WHERE e.
 batch still gets looked up rather than skipping batches that can't match. Not required for
 correctness, just an efficiency gap.
 
-## Stream index-lookup responses instead of buffering the full tree
-`RestConnectorIndex.lookup()` calls `MAPPER.readTree(response)`, materializing each batch's
-entire response as an in-memory `JsonNode` tree before reading anything out of it - unlike
-`RestRecordCursor`, which streams. JFR profiling of a large JOIN showed this dominates the
-lookup path's CPU time (Jackson tokenizing + tree construction was ~78% of on-thread samples),
-and it's the same full-buffer pattern `docs/COMPARISON.md` documents as a real memory problem
-for a competing connector. Since only a handful of paths are ever read per response row, a
-streaming/targeted parse could avoid materializing the rest of each row entirely.
+## Reuse a single HttpClient per catalog
+Every `RestRecordCursor` constructor and every `RestConnectorIndex.lookup()` call does
+`new RestHttpClient(config)`, and each of those does `HttpClient.newHttpClient()`. Java's
+`HttpClient` is meant to be reused (connection pool, TLS session, executor); constructing a
+new one per request throws that away.
+
+For a single large GET/filter-POST this is one extra client for the whole query. For a bulk
+`JOIN` it is one new client per batch. Sharing one client means mixing a live pool into
+`RestConfig` or threading `RestHttpClient` through the SPI wrappers. Skipped: architecture
+over a minor keep-alive/executor win.
+
+## Scan via ConnectorPageSourceProvider instead of ConnectorRecordSetProvider
+GET/filter-POST use `getRecordSetProvider()` → `RestRecordCursor` (one JSON object per
+`advanceNextPosition()`). Trino wraps that cursor in `RecordPageSource` and builds pages
+itself. `Connector.getPageSourceProvider()` is the current scan SPI: implement
+`ConnectorPageSource.getNextSourcePage()`, write columns into `BlockBuilder`s, return a
+`Page`. `RestRecordSet` / `RestRecordCursor` would go away.
+
+Valid, scan only. `ConnectorIndex.lookup(RecordSet)` is unchanged — JOIN still receives a
+`RecordSet` of probe keys and still returns a `ConnectorPageSource`. Helps large GET/filter-POST
+(less per-cell boxing). Does not change HTTP, JOIN request build, or JOIN `InMemoryRecordSet`.
+Cost is a rewrite (`Page`, `BlockBuilder`, VARCHAR `Slice`, page size, `getMemoryUsage`).
 
 ## Benchmark the index-lookup request-building path
 `RestConnectorIndex.lookup()` builds each row's request body via `PostBodyDefinition.buildPostPayload()`
@@ -73,14 +87,3 @@ join) or a duplicated key (silently fans out into extra rows). Worth adding an o
 verification mode: track which key value was sent for each request slot, and log or fail loudly
 when an echoed key doesn't correspond to anything that was actually requested in that batch.
 
-
-## Clear error message for non-JOIN queries against bulk-lookup endpoints
-A bulk-lookup endpoint (`PostBodyDefinition.isRootArray() == true`) is only queryable via an
-index-join (`JOIN ... ON`) - there's no valid way to serve a plain `SELECT * FROM
-rest.default.enrich` with no join, since there's no `WHERE`-resolved value to build the request
-array from. Right now that case isn't special-cased: it falls through to
-`RestSplitManager.getSplits()`'s ordinary filter-POST path, which throws the generic "missing
-resolvable predicate for required filter column(s)" error - technically correct, but confusing
-for a table that was never queryable this way in the first place. Should fail earlier and more
-specifically (e.g. in `RestMetadata`) with a message that says outright: "this table can only be
-queried via a JOIN using its required key columns."
