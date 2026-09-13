@@ -20,6 +20,7 @@ import io.trino.spi.connector.ConnectorResolvedIndex;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
+import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
@@ -244,5 +245,22 @@ public class RestMetadataTest {
     assertEquals("lookup", indexHandle.schemaTableName().getTableName());
     assertNotNull(indexHandle.endpointDefinition());
     assertEquals("/lookup", indexHandle.endpointDefinition().path());
+  }
+
+  @Test
+  void selectStarOnBulkLookupTableFailsWithJoinOnlyMessage() {
+    RestMetadata metadata = metadataFor(ROOT_ARRAY_SPEC);
+    ConnectorTableHandle tableHandle = metadata.getTableHandle(null,
+        new SchemaTableName("default", "lookup"), Optional.empty(), Optional.empty());
+    RestConfig config = new RestConfig(Map.of(
+        "rest.token", "token",
+        "rest.specUrl", wm.baseUrl() + "/spec",
+        "rest.baseUrl", wm.baseUrl()));
+    RestSplitManager splitManager = new RestSplitManager(config, metadata);
+
+    TrinoException e = assertThrows(TrinoException.class, () -> splitManager.getSplits(
+        RestTransactionHandle.INSTANCE, null, tableHandle, DynamicFilter.EMPTY, Constraint.alwaysTrue()));
+
+    assertEquals("Table lookup can only be used in a join.", e.getMessage());
   }
 }
