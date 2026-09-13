@@ -20,10 +20,10 @@ running a query and rows coming back.
 | `RestConnectorFactory` | `ConnectorFactory` | Builds one `RestConnector` per catalog, from `rest.properties`. |
 | `RestConnector` | `Connector` | Owns `RestMetadata`, `RestSplitManager`, `RestRecordSetProvider`; answers `beginTransaction()` and `getIndexProvider()` (an inline `ConnectorIndexProvider` lambda for the bulk-lookup/index-join path). |
 | `RestTransactionHandle` | `ConnectorTransactionHandle` | Stateless singleton enum (`INSTANCE`) — this connector has no real transactions. |
-| `RestMetadata` | `ConnectorMetadata` | Table/column discovery; WHERE-clause pushdown (`applyFilter`) for filter-POST tables; index-join feasibility (`resolveIndex`) for bulk-lookup tables. Owns `tableNameToEndPointDefinition`, built once at construction via `OpenApiSchemaParser.parse()`. |
+| `RestMetadata` | `ConnectorMetadata` | Table/column discovery; WHERE-clause pushdown (`applyFilter`) for filter-POST tables; index-join feasibility (`resolveIndex`) for bulk-lookup tables. Owns `tableNameToEndPointDefinition`, filled lazily on the first coordinator call that needs tables (`listTables` / `getTableHandle` / `getColumnHandles` / `getTableMetadata` / `applyFilter` / `resolveIndex`, and `getSplits` via `RestSplitManager`). Empty after a failed fetch is retried on the next call. Worker `getIndex` / `getRecordSet` never call this getter. |
 | `RestTableHandle` | `ConnectorTableHandle` | Wraps a `SchemaTableName` plus `resolvedFilterValues` — WHERE-clause values resolved for filter-POST tables, accumulated across `applyFilter` rounds. |
 | `RestColumnHandle` | `ColumnHandle` | `columnName` + `columnType`; can rebuild a full `ColumnMetadata` on demand. |
-| `RestIndexHandle` | `ConnectorIndexHandle` | Just a `SchemaTableName` — lets `resolveIndex()` and `getIndexProvider()`'s `getIndex()` agree on which endpoint a given index-join is for. |
+| `RestIndexHandle` | `ConnectorIndexHandle` | `SchemaTableName` plus the coordinator's `EndpointDefinition`. `resolveIndex()` fills it; worker `getIndex()` uses `handle.endpointDefinition()` and does not re-look up a local parse. Same shipping pattern as `RestSplit`. |
 | `RestSplitManager` | `ConnectorSplitManager` | Turns a table handle into split(s). Currently always exactly one `RestSplit` per query — no partitioning. |
 | `RestSplit` | `ConnectorSplit` | `uri` + the endpoint's `EndpointDefinition`, plus an optional pre-built request body (filter-POST tables). |
 | `RestRecordSetProvider` | `ConnectorRecordSetProvider` | Given a split + selected columns, builds a `RestRecordSet`. |
@@ -62,15 +62,17 @@ path.
 
 ### GET and filter-POST paths
 
-Boot happens once per catalog. Everything under **PLAN** happens once per
-query. The only network hop between coordinator and worker in this diagram
-is the split itself; the actual HTTP request to the target API happens on
-the worker.
+Boot happens once per catalog on every node and does **not** fetch the OpenAPI
+spec. The spec is parsed lazily on the coordinator the first time a query (or
+`SHOW TABLES`) needs the table list; a failed fetch is retried on the next such
+call. Everything under **PLAN** happens once per query, on the coordinator.
+The only network hop between coordinator and worker in this diagram is the
+split itself; the actual HTTP request to the target API happens on the worker.
 
 ```mermaid
 flowchart TD
     subgraph Boot["BOOT — once per catalog"]
-        A["RestPlugin → RestConnectorFactory → RestConnector<br/>builds RestMetadata (parses the OpenAPI spec here), RestSplitManager, RestRecordSetProvider"]
+        A["RestPlugin → RestConnectorFactory → RestConnector<br/>builds RestMetadata, RestSplitManager, RestRecordSetProvider<br/>(spec is not parsed here)"]
     end
 
     subgraph Coordinator["COORDINATOR — per query"]
@@ -130,7 +132,7 @@ clause known at planning time.
 
 ```mermaid
 flowchart TD
-    subgraph Plan["PLAN — once per query"]
+    subgraph Plan["PLAN — once per query, coordinator"]
         A["Planner considers this JOIN as an index-join candidate"]
         B["RestMetadata.resolveIndex(indexableColumns, outputColumns, tupleDomain)"]
         C{"Table is a bulk-lookup<br/>endpoint, and indexableColumns<br/>match its keys?"}
@@ -141,10 +143,10 @@ flowchart TD
         C -->|no| E
     end
 
-    subgraph ExecStart["EXECUTION START — once per query"]
+    subgraph ExecStart["EXECUTION START — once per query, worker"]
         F["Connector.getIndexProvider()<br/>→ inline ConnectorIndexProvider lambda"]
-        G["getIndex(transactionHandle, session,<br/>RestIndexHandle, lookupSchema, outputSchema)"]
-        H["new RestConnectorIndex(config, definition,<br/>lookupSchema, outputSchema)"]
+        G["getIndex(transactionHandle, session,<br/>RestIndexHandle, lookupSchema, outputSchema)<br/>definition comes from the handle, not a local map"]
+        H["new RestConnectorIndex(config, handle.endpointDefinition(),<br/>lookupSchema, outputSchema)"]
         F --> G --> H
     end
 
